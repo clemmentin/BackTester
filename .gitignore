@@ -1,0 +1,20 @@
+# Python virtual environment
+venv/
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# IDE files
+.idea/
+.vscode/
+
+# Large data files
+*.csv
+data/
+
+# SAS files
+*.sas7bdat
+*.log
+*.lst
