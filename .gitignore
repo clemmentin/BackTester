@@ -11,8 +11,6 @@ __pycache__/
 .vscode/
 
 # Large data files
-*.csv
-data/
 
 # SAS files
 *.sas7bdat

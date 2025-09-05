@@ -44,7 +44,7 @@ class BacktestEngine:
 if __name__ == "__main__":
     csv_directory = './data'
     symbols = ['SPY']
-    signal_file = './VOL_PLOT.csv'
+    signal_file = './data//VOL_PLOT.csv'
     capital = 100000.0
     buy = 17
     sell= 27
