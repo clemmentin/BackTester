@@ -1,5 +1,13 @@
 from abc import ABC, abstractmethod
 from events import SignalEvent
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    filename='backtest_log.log',
+    filemode='w'
+)
 class Strategy(ABC):
     @abstractmethod
     def calculate_signal(self,event):
@@ -55,7 +63,8 @@ class VolatilityTargetingStrategy(Strategy):
         self.symbol_list = symbol_list
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
-        self.bought = {s: False for s in self.symbol_list}
+        self.position = {s: {'bought': False, 'entryPrice': 0.0} for s in self.symbol_list}
+        self.stop_loss = 0.05
     def calculate_signal(self, event):
         if event.type == 'Market':
             symbol = event.symbol
@@ -64,22 +73,33 @@ class VolatilityTargetingStrategy(Strategy):
             sma200 = event.data.get('sma200', None)
             if vol_forecast is None or sma200 is None or current_price is None:
                 return
+            is_bought = self.position[symbol]['bought']
+            entryPrice = self.position[symbol]['entryPrice']
             up = current_price > sma200
-            if vol_forecast < self.buy_threshold and up and not self.bought[symbol]:
+            if vol_forecast < self.buy_threshold and up and not is_bought:
                 signal = SignalEvent(timestamp=event.timestamp,
                                      symbol=symbol,
                                      signal_type='Long')
                 self.events.put(signal)
-                self.bought[symbol] = True
-                print(
+                self.position[symbol]['bought'] = True
+                self.position[symbol]['entryPrice'] = current_price
+                logging.info(
                     f"STRATEGY: Vol forecast ({vol_forecast:.2f}%) is BELOW buy threshold ({self.buy_threshold}%) -> Generate LONG signal."
                 )
-            elif (vol_forecast > self.sell_threshold or not up)and self.bought[symbol]:
-                signal = SignalEvent(timestamp=event.timestamp,
-                                     symbol=symbol,
-                                     signal_type='Exit')
-                self.events.put(signal)
-                self.bought[symbol] = False
-                print(
-                    f"STRATEGY: Vol forecast ({vol_forecast:.2f}%) is ABOVE sell threshold ({self.sell_threshold}%) -> Generate EXIT signal."
-                )
+            elif is_bought:
+                stop_loss_price = entryPrice * (1 - self.stop_loss)
+                exitReason = None
+                if current_price <= stop_loss_price:
+                    exitReason = f"Stop Loss triggered at {current_price:.2f}"
+                elif vol_forecast > self.sell_threshold:
+                    exitReason = f"Vol forecast ({vol_forecast:.2f}%) is ABOVE sell threshold ({self.sell_threshold}%)"
+                elif not up:
+                    exitReason = f"Price ({current_price:.2f}) crossed BELOW SMA200 ({sma200:.2f})"
+                if exitReason:
+                    signal = SignalEvent(timestamp=event.timestamp,
+                                         symbol=symbol,
+                                         signal_type='Exit')
+                    self.events.put(signal)
+                    self.position[symbol]['bought'] = False
+                    self.position[symbol]['entryPrice'] = 0.0
+                    logging.info(f"[{event.timestamp}]STRATEGY: {exitReason} -> Generate EXIT signal.")
