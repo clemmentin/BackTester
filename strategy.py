@@ -58,11 +58,12 @@ class DummyStrategy(Strategy):
                     print(f"STRATEGY: Stop Loss! Sell {symbol} at {current_price:.2f} (Entry: {entry_price:.2f})")
 
 class VolatilityTargetingStrategy(Strategy):
-    def __init__(self, events_queue, symbol_list, buy_threshold, sell_threshold):
+    def __init__(self, events_queue, symbol_list, buy_threshold, sell_threshold,rsi_threshold):
         self.events = events_queue
         self.symbol_list = symbol_list
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
+        self.rsi_threshold = rsi_threshold
         self.position = {s: {'bought': False, 'entryPrice': 0.0} for s in self.symbol_list}
         self.stop_loss = 0.05
     def calculate_signal(self, event):
@@ -71,12 +72,14 @@ class VolatilityTargetingStrategy(Strategy):
             vol_forecast = event.data.get('vol_forecast', None)
             current_price = event.data.get('close')
             sma200 = event.data.get('sma200', None)
-            if vol_forecast is None or sma200 is None or current_price is None:
+            rsi = event.data.get('rsi',None)
+            if vol_forecast is None or sma200 is None or current_price is None or rsi is None:
                 return
             is_bought = self.position[symbol]['bought']
             entryPrice = self.position[symbol]['entryPrice']
             up = current_price > sma200
-            if vol_forecast < self.buy_threshold and up and not is_bought:
+            momentum = rsi > self.rsi_threshold
+            if vol_forecast < self.buy_threshold and up and not is_bought and momentum:
                 signal = SignalEvent(timestamp=event.timestamp,
                                      symbol=symbol,
                                      signal_type='Long')

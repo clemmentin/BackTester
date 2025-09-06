@@ -1,4 +1,5 @@
 import pandas as pd
+import talib
 from abc import ABC, abstractmethod
 from events import  MarketEvent
 
@@ -40,6 +41,7 @@ class HistoricCSVDataHandler(DataHandler):
                 file_path, header=0, index_col=0, parse_dates=True
             )
             price_data['sma200'] = price_data['Close'].rolling(window=200).mean()
+            price_data['rsi'] = talib.RSI(price_data['Close'], timeperiod=14)
             if self.signal_data is not None:
                 combined_data = price_data.merge(self.signal_data, left_index=True, right_index=True, how='left')
                 combined_data['vol_forecast'] = combined_data['vol_forecast'].ffill()
@@ -60,7 +62,8 @@ class HistoricCSVDataHandler(DataHandler):
                     'low': row['Low'], 'close': row['Close'],
                     'volume': row['Volume'],
                     'vol_forecast': row.get('vol_forecast', 0),
-                    'sma200': row.get('sma200', None)
+                    'sma200': row.get('sma200', None),
+                    'rsi' : row.get('rsi', None)
                 }
                 self.latest_symbol_data[s] = bar
                 market_event = MarketEvent(timestamp = timestamp, symbol = s, data = bar)
