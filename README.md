@@ -1,31 +1,54 @@
-# Quantitative Backtesting Engine & Strategy
-
-A quantitative research project featuring a modular, event-driven backtesting engine built from scratch in Python, used to validate a trading strategy based on a GARCH volatility model developed in SAS.
+# Event-Driven Backtesting Engine for Quantitative Strategies
+An institutional-grade, event-driven backtesting framework built from scratch in Python. It is designed for the rigorous research, development, and validation of sophisticated quantitative trading strategies.
 
 ---
 
 ### Key Features
 
--   **Modular Engine (Python):** Event-driven architecture built from the ground up, allowing for easy extension and testing of different strategies, data sources, or execution models.
--   **Econometric Model (SAS):** Replication of a published academic study to forecast S&P 500 volatility using a GARCH(1,1) model.
--   **Dual-Filter Strategy:** A quantitative strategy that combines the GARCH volatility forecast (risk filter) with a 200-day moving average (trend filter) to dynamically manage portfolio exposure.
+-   **Intelligent Alpha Engine:** A central "brain" that fuses signals from multiple alpha sources (e.g., momentum, technicals) using dynamic, market-regime-aware weighting. It leverages parallel processing for high-performance computation.
+
+-   **Proactive Risk Management:** A multi-factor `RiskManager` that calculates a composite risk score to determine a global `RiskMode` (e.g., `Normal`, `Defensive`), which directly influences position sizing and signal generation.
+
+-   **Robust Optimization Suite:** Features **Walk-Forward Optimization (WFO)** and **Bayesian Optimization** (`scikit-optimize`) to rigorously test strategy robustness and prevent overfitting.
+
+-   **Interactive Analysis Dashboard:** A comprehensive dashboard built with `Streamlit` and `Plotly` for in-depth visualization of performance, risk metrics, and simulation results.
+
+-   **Resilient Data Pipeline:** A full-featured data pipeline with **PostgreSQL** integration for efficient data fetching, feature engineering, and caching.
 
 ---
 
 ### Tech Stack
 
--   **Languages:** Python, SAS
--   **Core Libraries:** Pandas, NumPy, Matplotlib
+-   **Core Engine:** Python, Multiprocessing
+-   **Quantitative & Data:** Pandas, NumPy, TA-Lib, scikit-optimize, ARCH
+-   **Database & Pipeline:** PostgreSQL, SQLAlchemy, yfinance, fredapi
+-   **Visualization & Web:** Streamlit, Plotly, Matplotlib
+-   **Development:** Git
 
 ---
 
 ### How to Run
 
-1.  **Prerequisites:** Python 3.x and required libraries (`pip install pandas numpy matplotlib`).
-2.  **Clone the repository:** `git clone [your-repo-url]`
-3.  **Run the backtest:**
+1.  **Clone the repository:**
     ```bash
-    python engine.py
+    git clone https://github.com/clemmentin/BackTester.git
     ```
 
-The script will execute the backtest using the included data files and generate a performance summary and an equity curve chart.
+2.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+3.  **Configure environment:**
+    Create a `.env` file in the root directory and set up your database credentials. 
+
+4.  **Set up the database:**
+    This command will create the necessary database and tables.
+    ```bash
+    python data_pipeline/db_setup.py
+    ```
+5.  **Run a full data pipeline and backtest:**
+    This script will handle data ingestion, feature engineering, and execute a backtest using the default configuration.
+    ```bash
+    python main.py
+    ```

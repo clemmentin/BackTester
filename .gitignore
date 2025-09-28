@@ -10,9 +10,14 @@ __pycache__/
 .idea/
 .vscode/
 
-# Large data files
-
-# SAS files
-*.sas7bdat
+.env
 *.log
-*.lst
+test.py
+test1.py
+test2.py
+*.json
+*.parquet
+alpha_strategy.py
+monitoring.py
+legacy/
+Logbook.txt
