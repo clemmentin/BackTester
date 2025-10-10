@@ -1,17 +1,20 @@
-# strategies/alpha/market_detector.py
-
 import logging
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from functools import partial
+from typing import Dict, List, Tuple, Optional
 
+import config
 import numpy as np
 import pandas as pd
 
+from .ms_garch_detector import MsGarchDetector
+from config.general_config import RISK_ON_SYMBOLS
+
 
 class MarketRegime(Enum):
-    """Market regime classifications"""
+    """Fine-grained market regime classifications (intermediate states)."""
 
     STRONG_BULL = "strong_bull"
     BULL = "bull"
@@ -22,152 +25,524 @@ class MarketRegime(Enum):
     VOLATILE = "volatile"
 
 
+class MacroRegime(Enum):
+    """High-level strategic states for portfolio allocation."""
+
+    OFFENSE = "offense"
+    DEFENSE = "defense"
+    SIDEWAYS = "sideways"
+
+
 @dataclass
 class MarketState:
+    """Complete market state snapshot at a given time."""
+
     regime: MarketRegime
+    macro_regime: MacroRegime
     confidence: float
     indicators: Dict[str, float]
-    risk_level: str  # 'low', 'medium', 'high', 'extreme'
+    environment_risk_level: str
     trend_strength: float
-    volatility_regime: str  # 'low', 'normal', 'elevated', 'high'
-    breadth: float  # Market breadth (% of advancing symbols)
+    volatility_regime: str
+    breadth: float
+    macro_signals: Dict[str, float]
+    is_sideways: bool
     timestamp: pd.Timestamp
 
 
+class MacroEnhancer:
+    """
+    Analyzes macro indicators to enhance regime detection.
+    Provides early warning signals and regime confidence adjustments.
+    """
+
+    def __init__(self, config_params: Dict):
+        self.logger = logging.getLogger(__name__)
+        self.enabled = config_params.get("enable_macro_enhancement", False)
+        self.indicators_subset = config_params.get("macro_indicators_subset", [])
+        self.thresholds = config_params.get("macro_thresholds", {})
+        self.logger.info(
+            f"MacroEnhancer initialized: enabled={self.enabled}, "
+            f"indicators={len(self.indicators_subset)}"
+        )
+
+    def analyze_macro_conditions(
+        self, macro_data: Optional[pd.DataFrame], timestamp: pd.Timestamp
+    ) -> Dict[str, float]:
+        """
+        Analyze macro indicators and return warning signals.
+
+        Returns:
+            Dict with keys:
+            - recession_risk: [0, 1] probability
+            - policy_tightening_risk: [0, 1] probability
+            - crisis_warning: [0, 1] severity
+            - macro_confidence_adj: [-0.2, +0.2] adjustment to regime confidence
+        """
+        if not self.enabled or macro_data is None or macro_data.empty:
+            return self._default_signals()
+
+        try:
+            # Get latest macro values at or before timestamp
+            macro_snapshot = macro_data.loc[:timestamp].iloc[-1]
+
+            signals = {
+                "recession_risk": 0.0,
+                "policy_tightening_risk": 0.0,
+                "crisis_warning": 0.0,
+                "macro_confidence_adj": 0.0,
+            }
+
+            # === 1. Yield Curve Analysis (Recession Predictor) ===
+            if "T10Y2Y" in macro_snapshot and not pd.isna(macro_snapshot["T10Y2Y"]):
+                yield_spread = macro_snapshot["T10Y2Y"]
+                inversion_threshold = self.thresholds.get(
+                    "yield_curve_inversion", -0.20
+                )
+
+                if yield_spread < inversion_threshold:
+                    # Severe inversion = high recession risk
+                    signals["recession_risk"] = min(
+                        1.0, abs(yield_spread) / abs(inversion_threshold)
+                    )
+                    self.logger.debug(
+                        f"Yield curve inverted: {yield_spread:.2f}% "
+                        f"(recession_risk={signals['recession_risk']:.2f})"
+                    )
+
+            # === 2. VIX Fear Gauge (Crisis Detection) ===
+            if "VIXCLS" in macro_snapshot and not pd.isna(macro_snapshot["VIXCLS"]):
+                vix_level = macro_snapshot["VIXCLS"]
+                crisis_threshold = self.thresholds.get("vix_crisis_level", 35)
+
+                if vix_level > crisis_threshold:
+                    # Elevated VIX = crisis warning
+                    signals["crisis_warning"] = min(
+                        1.0, (vix_level - 20) / (crisis_threshold - 20)
+                    )
+                    self.logger.debug(
+                        f"VIX elevated: {vix_level:.1f} "
+                        f"(crisis_warning={signals['crisis_warning']:.2f})"
+                    )
+
+            # === 3. Labor Market Health (Economic Momentum) ===
+            if "UNRATE" in macro_snapshot and not pd.isna(macro_snapshot["UNRATE"]):
+                # Check if unemployment is rising (compare to 3-month ago)
+                lookback_data = macro_data.loc[:timestamp].tail(90)
+                if len(lookback_data) >= 60:
+                    current_unrate = macro_snapshot["UNRATE"]
+                    past_unrate = (
+                        lookback_data.iloc[-60]["UNRATE"]
+                        if "UNRATE" in lookback_data.columns
+                        else current_unrate
+                    )
+
+                    unemployment_change = current_unrate - past_unrate
+                    spike_threshold = self.thresholds.get("unemployment_spike", 0.50)
+
+                    if unemployment_change > spike_threshold:
+                        # Rising unemployment = weakening economy
+                        signals["recession_risk"] = max(
+                            signals["recession_risk"],
+                            min(1.0, unemployment_change / spike_threshold),
+                        )
+                        self.logger.debug(
+                            f"Unemployment rising: +{unemployment_change:.2f}% "
+                            f"(recession_risk={signals['recession_risk']:.2f})"
+                        )
+
+            # === 4. Inflation Pressure (Policy Tightening Risk) ===
+            if "CPIAUCSL" in macro_snapshot and not pd.isna(macro_snapshot["CPIAUCSL"]):
+                # Calculate YoY inflation if we have 12 months of data
+                lookback_data = macro_data.loc[:timestamp].tail(365)
+                if len(lookback_data) >= 252:
+                    current_cpi = macro_snapshot["CPIAUCSL"]
+                    past_cpi = (
+                        lookback_data.iloc[-252]["CPIAUCSL"]
+                        if "CPIAUCSL" in lookback_data.columns
+                        else current_cpi
+                    )
+
+                    inflation_yoy = (current_cpi / past_cpi - 1) if past_cpi > 0 else 0
+                    high_inflation_threshold = self.thresholds.get(
+                        "inflation_high", 0.05
+                    )
+
+                    if inflation_yoy > high_inflation_threshold:
+                        # High inflation = potential Fed tightening
+                        signals["policy_tightening_risk"] = min(
+                            1.0, inflation_yoy / high_inflation_threshold
+                        )
+                        self.logger.debug(
+                            f"Inflation elevated: {inflation_yoy:.2%} YoY "
+                            f"(tightening_risk={signals['policy_tightening_risk']:.2f})"
+                        )
+
+            # === 5. Composite Macro Confidence Adjustment ===
+            # Negative signals reduce confidence in bullish regimes
+            negative_signal_score = (
+                signals["recession_risk"] * 0.4
+                + signals["crisis_warning"] * 0.4
+                + signals["policy_tightening_risk"] * 0.2
+            )
+
+            # Adjustment range: -0.2 (very negative) to 0 (neutral)
+            signals["macro_confidence_adj"] = -0.2 * negative_signal_score
+
+            self.logger.debug(
+                f"Macro signals: recession={signals['recession_risk']:.2f}, "
+                f"crisis={signals['crisis_warning']:.2f}, "
+                f"tightening={signals['policy_tightening_risk']:.2f}, "
+                f"conf_adj={signals['macro_confidence_adj']:.2f}"
+            )
+
+            return signals
+
+        except Exception as e:
+            self.logger.warning(f"Macro analysis failed: {e}")
+            return self._default_signals()
+
+    def _default_signals(self) -> Dict[str, float]:
+        """Return neutral signals when macro data unavailable."""
+        return {
+            "recession_risk": 0.0,
+            "policy_tightening_risk": 0.0,
+            "crisis_warning": 0.0,
+            "macro_confidence_adj": 0.0,
+        }
+
+
 class MarketDetector:
+    """
+    Market regime detector with MS-GARCH volatility model and macro enhancement.
+
+    NEW: Integrates MacroEnhancer for early warning signals
+    """
+
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
 
-        # Detection parameters
-        self.lookback_short = kwargs.get("lookback_short", 20)
-        self.lookback_medium = kwargs.get("lookback_medium", 50)
-        self.lookback_long = kwargs.get("lookback_long", 200)
+        # Load parameters from config
+        get_param = partial(config.get_param_with_override, kwargs, "market_detector")
+        self.lookback_short = get_param("lookback_short", 20)
+        self.lookback_medium = get_param("lookback_medium", 50)
+        self.lookback_long = get_param("lookback_long", 200)
+        self.bull_threshold = get_param("bull_threshold", 0.03)
+        self.strong_bull_threshold = get_param("strong_bull_threshold", 0.10)
+        self.bear_threshold = get_param("bear_threshold", -0.05)
+        self.crisis_threshold = get_param("crisis_threshold", -0.15)
+        self.breadth_bull_threshold = get_param("breadth_bull_threshold", 0.65)
+        self.breadth_bear_threshold = get_param("breadth_bear_threshold", 0.35)
 
-        # Regime thresholds
-        self.bull_threshold = kwargs.get("bull_threshold", 0.05)
-        self.strong_bull_threshold = kwargs.get("strong_bull_threshold", 0.15)
-        self.bear_threshold = kwargs.get("bear_threshold", -0.05)
-        self.crisis_threshold = kwargs.get("crisis_threshold", -0.15)
-        self.recovery_threshold = kwargs.get("recovery_threshold", 0.10)
+        # Load sideways detection config
+        sideways_config = config.get_trading_param(
+            "RISK_PARAMS", "sideways_detection", default={}
+        )
+        self.sideways_detection_enabled = sideways_config.get("enabled", True)
+        self.sideways_lookback = sideways_config.get("lookback", 30)
+        self.sideways_low_trend_threshold = sideways_config.get(
+            "low_trend_threshold", 0.05
+        )
+        self.sideways_vol_min = sideways_config.get("vol_min", 0.008)
+        self.sideways_vol_max = sideways_config.get("vol_max", 0.025)
 
-        # Volatility thresholds
-        self.normal_volatility = kwargs.get("normal_volatility", 0.15)
-        self.high_volatility = kwargs.get("high_volatility", 0.30)
-        self.extreme_volatility = kwargs.get("extreme_volatility", 0.50)
+        # Initialize GARCH detector
+        self.garch_detector = MsGarchDetector()
 
-        # Market breadth parameters
-        self.breadth_bull_threshold = kwargs.get("breadth_bull", 0.65)
-        self.breadth_bear_threshold = kwargs.get("breadth_bear", 0.35)
+        # Initialize macro enhancer
+        macro_config = {
+            "enable_macro_enhancement": get_param("enable_macro_enhancement", False),
+            "macro_indicators_subset": get_param("macro_indicators_subset", []),
+            "macro_thresholds": get_param("macro_thresholds", {}),
+        }
+        self.macro_enhancer = MacroEnhancer(macro_config)
 
-        # Early warning system
-        self.enable_early_warning = kwargs.get("enable_early_warning", True)
-        self.divergence_threshold = kwargs.get("divergence_threshold", 0.25)
-
-        # State tracking
-        self.regime_history = deque(maxlen=kwargs.get("history_length", 30))
-        self.volatility_history = deque(maxlen=kwargs.get("history_length", 30))
-        self.breadth_history = deque(maxlen=kwargs.get("history_length", 30))
-
-        # Cache
+        # Regime smoothing
+        self.macro_regime_history = deque(maxlen=3)
+        # Caching
+        self.state_cache_duration = get_param("cache_duration_seconds", 300)
         self.last_detection_time = None
         self.last_market_state = None
-        self.early_warning_active = False
+        self.garch_state_cache = {}
+        self.garch_cache_days = 15
+
+        self.logger.info(
+            "MarketDetector initialized with MS-GARCH and Macro Enhancement"
+        )
 
     def detect_market_state(
         self,
         market_data: pd.DataFrame,
         timestamp: pd.Timestamp,
         symbols: List[str] = None,
+        macro_data: Optional[pd.DataFrame] = None,  # NEW parameter
     ) -> MarketState:
-        # Use cache if recently calculated
-        if (
-            self.last_detection_time
-            and self.last_market_state
-            and (timestamp - self.last_detection_time).seconds < 300
-        ):  # 5 min cache
-            return self.last_market_state
+        """
+        Detect current market regime with macro enhancement.
 
-        # Extract market index data (SPY or similar)
+        NEW: Accepts optional macro_data for enhanced detection
+        """
+        # Check cache
+        if self.last_detection_time is not None and self.last_market_state is not None:
+            time_diff = (timestamp - self.last_detection_time).total_seconds()
+            if time_diff < self.state_cache_duration:
+                return self.last_market_state
+
+            # --- Step 1: Analyze market index (fast) and market breadth (now vectorized and fast) ---
         index_analysis = self._analyze_market_index(market_data, timestamp)
-
-        # Calculate market breadth
         market_breadth = self._calculate_market_breadth(market_data, timestamp, symbols)
 
-        # Analyze volatility regime
-        volatility_analysis = self._analyze_volatility_regime(market_data, timestamp)
+        # --- Step 2: Get GARCH volatility state using the new intelligent cache ---
+        garch_cache_key = timestamp.normalize().floor(f"{self.garch_cache_days}D")
 
-        # Detect divergences and early warnings
-        warnings = self._detect_early_warnings(
-            index_analysis, market_breadth, volatility_analysis
+        if garch_cache_key in self.garch_state_cache:
+            garch_vol_state = self.garch_state_cache[garch_cache_key]
+            self.logger.debug(
+                f"Using cached GARCH state for {timestamp.date()}: {garch_vol_state}"
+            )
+        else:
+            self.logger.info(
+                f"Recalculating GARCH state for cache key: {garch_cache_key.date()}"
+            )
+            try:
+                spy_data = market_data.xs("SPY", level="symbol").loc[:timestamp]
+                spy_returns = spy_data["close"].pct_change()
+                garch_vol_state = self.garch_detector.get_volatility_state(
+                    spy_returns, timestamp
+                )
+                self.garch_state_cache[garch_cache_key] = garch_vol_state
+            except Exception as e:
+                self.logger.warning(f"GARCH detection failed: {e}")
+                garch_vol_state = "unknown"
+
+        # If GARCH fails, we need a valid spy_returns series for sideways detection
+        try:
+            spy_returns = (
+                market_data.xs("SPY", level="symbol")
+                .loc[:timestamp]["close"]
+                .pct_change()
+            )
+        except Exception:
+            spy_returns = pd.Series()
+
+        # --- The rest of the logic remains the same ---
+        is_sideways = self._detect_sideways_market(spy_returns.dropna().tolist())
+        macro_signals = self.macro_enhancer.analyze_macro_conditions(
+            macro_data, timestamp
         )
-
-        # Combine all factors to determine regime
         regime, confidence = self._determine_market_regime(
-            index_analysis, market_breadth, volatility_analysis, warnings
+            index_analysis, market_breadth, garch_vol_state, macro_signals
         )
+        macro_regime = self._map_to_macro_regime(regime, garch_vol_state, macro_signals)
 
-        # Determine risk level
-        risk_level = self._assess_risk_level(regime, volatility_analysis, warnings)
+        self.macro_regime_history.append(macro_regime)
+        if (
+            len(self.macro_regime_history) > 1
+            and self.macro_regime_history[-1] != self.macro_regime_history[-2]
+        ):
+            confirmed_macro_regime = self.macro_regime_history[-2]
+        else:
+            confirmed_macro_regime = macro_regime
 
-        # Create market state
         market_state = MarketState(
             regime=regime,
+            macro_regime=confirmed_macro_regime,
             confidence=confidence,
             indicators={
-                "index_return_20d": index_analysis.get("return_20d", 0),
                 "index_return_50d": index_analysis.get("return_50d", 0),
                 "trend_strength": index_analysis.get("trend_strength", 0),
-                "volatility": volatility_analysis.get("current_vol", 0),
-                "volatility_ratio": volatility_analysis.get("vol_ratio", 1),
                 "market_breadth": market_breadth,
-                "drawdown": index_analysis.get("drawdown", 0),
-                "divergence_score": warnings.get("divergence_score", 0),
+                "garch_state": 1 if garch_vol_state == "high_vol" else 0,
             },
-            risk_level=risk_level,
+            environment_risk_level=self._assess_risk_level(regime),
             trend_strength=index_analysis.get("trend_strength", 0),
-            volatility_regime=volatility_analysis.get("regime", "normal"),
+            volatility_regime=garch_vol_state,
             breadth=market_breadth,
+            macro_signals=macro_signals,
+            is_sideways=is_sideways,
             timestamp=timestamp,
         )
 
-        # Update history and cache
-        self._update_history(market_state)
         self.last_detection_time = timestamp
         self.last_market_state = market_state
-
         return market_state
+
+    def _detect_sideways_market(self, returns: List[float]) -> bool:
+        """
+        Detects a choppy, trendless market based on recent returns.
+        This is a market condition analysis, so it belongs in the MarketDetector.
+        """
+        if not self.sideways_detection_enabled or len(returns) < self.sideways_lookback:
+            return False
+
+        recent_returns = np.array(returns[-self.sideways_lookback :])
+
+        # Low cumulative return and moderate volatility are signs of a sideways market
+        cumulative_return = np.sum(recent_returns)
+        volatility = np.std(recent_returns)
+
+        # Check against thresholds loaded in __init__
+        is_low_trend = abs(cumulative_return) < self.sideways_low_trend_threshold
+        is_moderate_vol = self.sideways_vol_min < volatility < self.sideways_vol_max
+
+        if is_low_trend and is_moderate_vol:
+            self.logger.info(
+                f"Sideways market detected: cum_ret={cumulative_return:.2%}, vol={volatility:.3f}"
+            )
+            return True
+
+        return False
+
+    def _map_to_macro_regime(
+        self, regime: MarketRegime, garch_state: str, macro_signals: Dict[str, float]
+    ) -> MacroRegime:
+        """
+        Map fine-grained regime to macro regime with macro enhancement.
+
+        NEW: Uses macro signals for additional validation
+        """
+        # DEFENSE: Crisis, Bear, or macro warnings
+        if regime in [MarketRegime.CRISIS, MarketRegime.BEAR]:
+            return MacroRegime.DEFENSE
+
+        # NEW: Macro warning override - even if price looks ok, macro says be cautious
+        if (
+            macro_signals["crisis_warning"] > 0.6
+            or macro_signals["recession_risk"] > 0.7
+        ):
+            self.logger.info(
+                f"Macro override to DEFENSE: crisis_warning={macro_signals['crisis_warning']:.2f}, "
+                f"recession_risk={macro_signals['recession_risk']:.2f}"
+            )
+            return MacroRegime.DEFENSE
+
+        # OFFENSE: Strong bull + low vol + no macro warnings
+        if (
+            regime in [MarketRegime.STRONG_BULL, MarketRegime.BULL]
+            and garch_state == "low_vol"
+            and macro_signals["crisis_warning"] < 0.3
+            and macro_signals["recession_risk"] < 0.4
+        ):
+            return MacroRegime.OFFENSE
+
+        # SIDEWAYS: Everything else (uncertain conditions)
+        return MacroRegime.SIDEWAYS
+
+    def _determine_market_regime(
+        self,
+        index_analysis: Dict,
+        market_breadth: float,
+        garch_vol_state: str,
+        macro_signals: Dict[str, float],
+    ) -> Tuple[MarketRegime, float]:
+        """
+        Determine fine-grained regime with macro-adjusted confidence.
+
+        NEW: Confidence is adjusted by macro signals
+        """
+        ret_50d = index_analysis["return_50d"]
+        drawdown = index_analysis["drawdown"]
+
+        # Base confidence before macro adjustment
+        base_confidence = 0.5
+
+        # === Crisis Detection ===
+        if garch_vol_state == "high_vol" and drawdown < self.crisis_threshold:
+            base_confidence = 0.9
+            regime = MarketRegime.CRISIS
+
+        # === Bear Market ===
+        elif (
+            ret_50d < self.bear_threshold
+            and market_breadth < self.breadth_bear_threshold
+        ) or (index_analysis["trend_strength"] < 0.3 and garch_vol_state == "high_vol"):
+            base_confidence = 0.8
+            regime = MarketRegime.BEAR
+
+        # === Strong Bull ===
+        elif (
+            ret_50d > self.strong_bull_threshold
+            and market_breadth > self.breadth_bull_threshold
+            and garch_vol_state == "low_vol"
+        ):
+            base_confidence = 0.85
+            regime = MarketRegime.STRONG_BULL
+
+        # === Bull ===
+        elif (
+            ret_50d > self.bull_threshold
+            and market_breadth > self.breadth_bull_threshold * 0.9
+            and garch_vol_state == "low_vol"
+        ):
+            base_confidence = 0.75
+            regime = MarketRegime.BULL
+
+        # === Normal / Volatile ===
+        else:
+            if garch_vol_state == "high_vol":
+                if abs(ret_50d) > 0.05 or index_analysis["trend_strength"] > 0.5:
+                    base_confidence = 0.6
+                    regime = MarketRegime.NORMAL
+                else:
+                    base_confidence = 0.7
+                    regime = MarketRegime.VOLATILE
+            else:
+                base_confidence = 0.6
+                regime = MarketRegime.NORMAL
+
+        # NEW: Apply macro confidence adjustment
+        adjusted_confidence = base_confidence + macro_signals["macro_confidence_adj"]
+        adjusted_confidence = max(
+            0.3, min(0.95, adjusted_confidence)
+        )  # Clamp to [0.3, 0.95]
+
+        if abs(macro_signals["macro_confidence_adj"]) > 0.05:
+            self.logger.debug(
+                f"Regime {regime.value}: confidence {base_confidence:.2f} → "
+                f"{adjusted_confidence:.2f} (macro_adj={macro_signals['macro_confidence_adj']:.2f})"
+            )
+
+        return regime, adjusted_confidence
+
+    def _assess_risk_level(self, regime: MarketRegime) -> str:
+        """Assess risk level from regime."""
+        if regime in [MarketRegime.CRISIS, MarketRegime.BEAR]:
+            return "high"
+        if regime == MarketRegime.VOLATILE:
+            return "medium"
+        if regime in [MarketRegime.STRONG_BULL, MarketRegime.BULL]:
+            return "low"
+        return "medium"
+
+    # === Price-based Analysis Methods (Unchanged) ===
 
     def _analyze_market_index(
         self, market_data: pd.DataFrame, timestamp: pd.Timestamp
     ) -> Dict[str, float]:
-        """Analyze market index (SPY) for regime detection"""
-        index_symbol = "SPY"  # Could be parameterized
-
+        """Analyze SPY for trend detection."""
+        index_symbol = "SPY"
         try:
             if index_symbol in market_data.index.get_level_values("symbol"):
-                index_data = market_data.xs(index_symbol, level="symbol")
-                index_data = index_data[index_data.index <= timestamp]
-
+                index_data = market_data.xs(index_symbol, level="symbol").loc[
+                    :timestamp
+                ]
                 if len(index_data) < self.lookback_long:
                     return self._default_index_analysis()
 
                 prices = index_data["close"].values
                 current_price = prices[-1]
 
-                # Calculate returns
                 ret_20d = (
-                    (current_price / prices[-self.lookback_short]) - 1
+                    ((current_price / prices[-self.lookback_short]) - 1)
                     if len(prices) >= self.lookback_short
                     else 0
                 )
                 ret_50d = (
-                    (current_price / prices[-self.lookback_medium]) - 1
+                    ((current_price / prices[-self.lookback_medium]) - 1)
                     if len(prices) >= self.lookback_medium
                     else 0
                 )
-                ret_200d = (current_price / prices[-self.lookback_long]) - 1
 
-                # Calculate moving averages
                 ma_50 = (
                     np.mean(prices[-self.lookback_medium :])
                     if len(prices) >= self.lookback_medium
@@ -175,7 +550,6 @@ class MarketDetector:
                 )
                 ma_200 = np.mean(prices[-self.lookback_long :])
 
-                # Trend strength (position relative to MAs)
                 trend_strength = 0.0
                 if current_price > ma_200:
                     trend_strength += 0.5
@@ -184,7 +558,6 @@ class MarketDetector:
                 if ma_50 > ma_200:
                     trend_strength += 0.2
 
-                # Calculate drawdown
                 recent_high = (
                     np.max(prices[-self.lookback_medium :])
                     if len(prices) >= self.lookback_medium
@@ -192,21 +565,14 @@ class MarketDetector:
                 )
                 drawdown = (current_price - recent_high) / recent_high
 
-                # Momentum indicators
-                momentum_score = ret_20d * 0.5 + ret_50d * 0.3 + ret_200d * 0.2
-
                 return {
                     "return_20d": ret_20d,
                     "return_50d": ret_50d,
-                    "return_200d": ret_200d,
                     "ma_50": ma_50,
                     "ma_200": ma_200,
                     "trend_strength": trend_strength,
                     "drawdown": drawdown,
-                    "momentum_score": momentum_score,
-                    "price_vs_ma200": (current_price - ma_200) / ma_200,
                 }
-
         except Exception as e:
             self.logger.error(f"Error analyzing market index: {e}")
 
@@ -218,331 +584,69 @@ class MarketDetector:
         timestamp: pd.Timestamp,
         symbols: List[str] = None,
     ) -> float:
-        """Calculate market breadth (advancing vs declining)"""
         if symbols is None:
-            symbols = market_data.index.get_level_values("symbol").unique()[
-                :50
-            ]  # Top 50
 
-        advancing = 0
-        declining = 0
-
-        for symbol in symbols:
-            try:
-                if symbol in market_data.index.get_level_values("symbol"):
-                    symbol_data = market_data.xs(symbol, level="symbol")
-                    symbol_data = symbol_data[symbol_data.index <= timestamp]
-
-                    if len(symbol_data) >= self.lookback_short:
-                        prices = symbol_data["close"].values
-                        ret = (prices[-1] / prices[-self.lookback_short]) - 1
-
-                        if ret > 0.02:  # 2% threshold
-                            advancing += 1
-                        elif ret < -0.02:
-                            declining += 1
-            except:
-                continue
-
-        total = advancing + declining
-        if total > 0:
-            breadth = advancing / total
-            self.breadth_history.append(breadth)
-            return breadth
-
-        return 0.5  # Neutral if no data
-
-    def _analyze_volatility_regime(
-        self, market_data: pd.DataFrame, timestamp: pd.Timestamp
-    ) -> Dict[str, float]:
-        """Analyze volatility regime"""
-        index_symbol = "SPY"
+            symbols = RISK_ON_SYMBOLS
 
         try:
-            if index_symbol in market_data.index.get_level_values("symbol"):
-                index_data = market_data.xs(index_symbol, level="symbol")
-                index_data = index_data[index_data.index <= timestamp]
+            # 1. Define the date range needed for the calculation
+            start_date = timestamp - pd.Timedelta(
+                days=self.lookback_short * 2
+            )  # Get a wider slice for safety
 
-                if len(index_data) >= self.lookback_short:
-                    prices = index_data["close"].values
+            # 2. Slice the main market_data DataFrame once for efficiency
+            sliced_data = market_data[
+                (market_data.index.get_level_values("timestamp") >= start_date)
+                & (market_data.index.get_level_values("timestamp") <= timestamp)
+            ]
 
-                    price_window = prices[-self.lookback_short :]
-                    if len(price_window) > 1:
-                        returns = np.diff(price_window) / price_window[:-1]
-                        current_vol = np.std(returns) * np.sqrt(252)
-                    else:
-                        current_vol = self.normal_volatility
+            if sliced_data.empty:
+                return 0.5  # Return neutral breadth if no data is available
 
-                    if len(prices) >= self.lookback_medium:
-                        hist_window = prices[-self.lookback_medium :]
-                        if len(hist_window) > 1:
-                            hist_returns = np.diff(hist_window) / hist_window[:-1]
-                            historical_vol = np.std(hist_returns) * np.sqrt(252)
-                        else:
-                            historical_vol = current_vol
-                    else:
-                        historical_vol = current_vol
+            # 3. Unstack to get prices with symbols as columns
+            prices = sliced_data["close"].unstack(level="symbol")
+            if prices.empty or timestamp not in prices.index:
+                return 0.5
+            # 4. Find which of the requested symbols are *actually available* in the historical data
+            available_symbols = prices.columns.intersection(symbols)
 
-                    vol_ratio = (
-                        current_vol / historical_vol if historical_vol > 0 else 1.0
-                    )
+            # If there are too few symbols with data, the breadth measure is meaningless
+            if len(available_symbols) < 20:  # Use a threshold like 20 symbols
+                self.logger.debug(
+                    f"Too few symbols ({len(available_symbols)}) for breadth calculation at {timestamp.date()}."
+                )
+                return 0.5  # Fallback to neutral
+            # 5. Calculate returns ONLY for the symbols that were available at that time
+            relevant_prices = prices[available_symbols]
+            returns = (relevant_prices / relevant_prices.shift(self.lookback_short)) - 1
 
-                    # Determine volatility regime
-                    if current_vol < self.normal_volatility * 0.7:
-                        regime = "low"
-                    elif current_vol < self.normal_volatility * 1.3:
-                        regime = "normal"
-                    elif current_vol < self.high_volatility:
-                        regime = "elevated"
-                    else:
-                        regime = "high"
+            # 6. Get the returns for the current timestamp for the valid symbols
+            returns_today = returns.loc[timestamp].dropna()
 
-                    self.volatility_history.append(current_vol)
+            if returns_today.empty:
+                return 0.5
 
-                    return {
-                        "current_vol": current_vol,
-                        "historical_vol": historical_vol,
-                        "vol_ratio": vol_ratio,
-                        "regime": regime,
-                        "vol_percentile": self._calculate_vol_percentile(current_vol),
-                    }
+            # 7. Count advancing and declining stocks
+            advancing = (returns_today > 0.02).sum()
+            declining = (returns_today < -0.02).sum()
+
+            total = advancing + declining
+            return advancing / total if total > 0 else 0.5
 
         except Exception as e:
-            self.logger.error(f"Error analyzing volatility: {e}")
-
-        return {
-            "current_vol": self.normal_volatility,
-            "historical_vol": self.normal_volatility,
-            "vol_ratio": 1.0,
-            "regime": "normal",
-            "vol_percentile": 50,
-        }
-
-    def _detect_early_warnings(
-        self, index_analysis: Dict, market_breadth: float, volatility_analysis: Dict
-    ) -> Dict:
-        """Detect early warning signals"""
-        warnings = {
-            "divergence_score": 0,
-            "breadth_warning": False,
-            "volatility_spike": False,
-            "trend_breakdown": False,
-        }
-
-        if not self.enable_early_warning:
-            return warnings
-
-        # Breadth divergence
-        if index_analysis["return_20d"] > 0 and market_breadth < 0.4:
-            warnings["breadth_warning"] = True
-            warnings["divergence_score"] += 0.3
-
-        # Volatility spike
-        if volatility_analysis["vol_ratio"] > 2.0:
-            warnings["volatility_spike"] = True
-            warnings["divergence_score"] += 0.3
-
-        # Trend breakdown
-        if (
-            index_analysis["trend_strength"] < 0.3
-            and index_analysis["drawdown"] < -0.05
-        ):
-            warnings["trend_breakdown"] = True
-            warnings["divergence_score"] += 0.4
-
-        # Update early warning status
-        if warnings["divergence_score"] > self.divergence_threshold:
-            if not self.early_warning_active:
-                self.logger.warning(f"Early warning activated: {warnings}")
-            self.early_warning_active = True
-        else:
-            self.early_warning_active = False
-
-        return warnings
-
-    def _determine_market_regime(
-        self,
-        index_analysis: Dict,
-        market_breadth: float,
-        volatility_analysis: Dict,
-        warnings: Dict,
-    ) -> Tuple[MarketRegime, float]:
-        """Determine market regime from all factors"""
-
-        # Base regime from returns
-        ret_20d = index_analysis["return_20d"]
-        ret_50d = index_analysis["return_50d"]
-        drawdown = index_analysis["drawdown"]
-
-        # Initial classification
-        if (
-            drawdown < self.crisis_threshold
-            or volatility_analysis["current_vol"] > self.extreme_volatility
-        ):
-            base_regime = MarketRegime.CRISIS
-        elif ret_20d > self.strong_bull_threshold and ret_50d > self.bull_threshold:
-            base_regime = MarketRegime.STRONG_BULL
-        elif (
-            ret_20d > self.bull_threshold
-            and market_breadth > self.breadth_bull_threshold
-        ):
-            base_regime = MarketRegime.BULL
-        elif (
-            ret_20d < self.bear_threshold
-            or market_breadth < self.breadth_bear_threshold
-        ):
-            base_regime = MarketRegime.BEAR
-        elif volatility_analysis["current_vol"] > self.high_volatility:
-            base_regime = MarketRegime.VOLATILE
-        elif ret_20d > 0 and drawdown < -0.10:  # Recovering from drawdown
-            base_regime = MarketRegime.RECOVERY
-        else:
-            base_regime = MarketRegime.NORMAL
-
-        # Adjust for warnings
-        if warnings["divergence_score"] > self.divergence_threshold:
-            if base_regime in [MarketRegime.STRONG_BULL, MarketRegime.BULL]:
-                base_regime = MarketRegime.NORMAL  # Downgrade
-            elif base_regime == MarketRegime.NORMAL:
-                base_regime = MarketRegime.BEAR  # Downgrade
-
-        # Calculate confidence
-        confidence = self._calculate_regime_confidence(
-            base_regime, index_analysis, market_breadth, volatility_analysis
-        )
-
-        return base_regime, confidence
-
-    def _calculate_regime_confidence(
-        self,
-        regime: MarketRegime,
-        index_analysis: Dict,
-        market_breadth: float,
-        volatility_analysis: Dict,
-    ) -> float:
-        """Calculate confidence in regime detection"""
-        confidence_factors = []
-
-        # Trend alignment
-        if regime in [MarketRegime.BULL, MarketRegime.STRONG_BULL]:
-            if index_analysis["trend_strength"] > 0.7:
-                confidence_factors.append(1.0)
-            else:
-                confidence_factors.append(0.5)
-
-        # Breadth confirmation
-        if regime == MarketRegime.BULL and market_breadth > 0.6:
-            confidence_factors.append(1.0)
-        elif regime == MarketRegime.BEAR and market_breadth < 0.4:
-            confidence_factors.append(1.0)
-        else:
-            confidence_factors.append(0.5)
-
-        # Volatility consistency
-        if volatility_analysis["regime"] == "normal":
-            confidence_factors.append(0.8)
-        elif volatility_analysis["regime"] in ["low", "elevated"]:
-            confidence_factors.append(0.6)
-        else:
-            confidence_factors.append(0.4)
-
-        # Historical consistency (if we have history)
-        if len(self.regime_history) >= 5:
-            recent_regimes = [s.regime for s in list(self.regime_history)[-5:]]
-            consistency = sum(1 for r in recent_regimes if r == regime) / 5
-            confidence_factors.append(consistency)
-
-        return np.mean(confidence_factors) if confidence_factors else 0.5
-
-    def _assess_risk_level(
-        self, regime: MarketRegime, volatility_analysis: Dict, warnings: Dict
-    ) -> str:
-        """Assess overall market risk level"""
-
-        risk_score = 0
-
-        # Regime risk
-        regime_risk = {
-            MarketRegime.CRISIS: 1.0,
-            MarketRegime.BEAR: 0.7,
-            MarketRegime.VOLATILE: 0.6,
-            MarketRegime.NORMAL: 0.3,
-            MarketRegime.RECOVERY: 0.4,
-            MarketRegime.BULL: 0.2,
-            MarketRegime.STRONG_BULL: 0.1,
-        }
-        risk_score += regime_risk.get(regime, 0.5) * 0.4
-
-        # Volatility risk
-        vol_risk = {"low": 0.1, "normal": 0.3, "elevated": 0.6, "high": 1.0}
-        risk_score += vol_risk.get(volatility_analysis["regime"], 0.5) * 0.3
-
-        # Warning risk
-        risk_score += warnings["divergence_score"] * 0.3
-
-        # Classify risk level
-        if risk_score < 0.25:
-            return "low"
-        elif risk_score < 0.5:
-            return "medium"
-        elif risk_score < 0.75:
-            return "high"
-        else:
-            return "extreme"
-
-    def _update_history(self, market_state: MarketState):
-        """Update historical tracking"""
-        self.regime_history.append(market_state)
+            # This will now catch other, unexpected errors, making debugging easier.
+            self.logger.warning(
+                f"Market breadth calculation failed unexpectedly for {timestamp.date()}: {e}"
+            )
+            return 0.5
 
     def _default_index_analysis(self) -> Dict[str, float]:
-        """Return default analysis when data is insufficient"""
+        """Default values when data insufficient."""
         return {
             "return_20d": 0,
             "return_50d": 0,
-            "return_200d": 0,
             "ma_50": 0,
             "ma_200": 0,
             "trend_strength": 0.5,
             "drawdown": 0,
-            "momentum_score": 0,
-            "price_vs_ma200": 0,
-        }
-
-    def _calculate_vol_percentile(self, current_vol: float) -> float:
-        """Calculate volatility percentile from history"""
-        if len(self.volatility_history) < 20:
-            return 50.0
-
-        sorted_vols = sorted(self.volatility_history)
-        position = np.searchsorted(sorted_vols, current_vol)
-        percentile = (position / len(sorted_vols)) * 100
-
-        return percentile
-
-    def get_regime_summary(self) -> Dict:
-        """Get summary of recent regime history"""
-        if not self.regime_history:
-            return {}
-
-        recent_regimes = list(self.regime_history)[-20:]
-        regime_counts = {}
-
-        for state in recent_regimes:
-            regime = state.regime.value
-            regime_counts[regime] = regime_counts.get(regime, 0) + 1
-
-        return {
-            "current_regime": (
-                self.last_market_state.regime.value
-                if self.last_market_state
-                else "unknown"
-            ),
-            "regime_distribution": regime_counts,
-            "avg_volatility": (
-                np.mean(list(self.volatility_history)) if self.volatility_history else 0
-            ),
-            "avg_breadth": (
-                np.mean(list(self.breadth_history)) if self.breadth_history else 0.5
-            ),
-            "early_warning": self.early_warning_active,
         }

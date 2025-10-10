@@ -1,80 +1,127 @@
-# General configuration - Data layer settings
-# Asset definitions, data sources, and system-wide constants
-
 import os
 from datetime import date
 
-RISK_ON_SYMBOLS = [
-    # Broad Market
-    "SPY",  # S&P 500
-    "QQQ",  # Nasdaq 100
-    "IWM",  # Russell 2000 (Small Caps)
-    # Key Sectors
-    "XLK",  # Technology
-    "XLF",  # Financials
-    "XLV",  # Health Care
-    "XLE",  # Energy
-    "XLI",  # Industrials
+CORE_MOMENTUM_UNIVERSE = [
+    # S-Tier Winners (Top Profit Generators)
+    "DDOG",
+    "CRWD",
+    "FTNT",
+    "F",
+    "GM",
+    "TGT",
+    "SNOW",
+    "COP",
+    # A-Tier Winners (Consistent Strong Performers)
+    "LRCX",
+    "ETN",
+    "WM",
+    "CAT",
+    "BKNG",
+    "ISRG",
+    "VRTX",
+    "EQIX",
+    "NOW",
+    "ASML",
+    "PLD",
+    "CMG",
+    "AMT",
+    "AVGO",
+    "NVDA",
+    "TSLA",
+    "AMD",
+    # Solid Performers with Good Profit Factor
+    "LOW",
+    "DE",
+    "INTU",
+    "NFLX",
+    "PFE",
+    "AXP",
+    "BAC",
+    "GS",
+    "GE",
+    "SBUX",
+    "TJX",
+    "GILD",
+    "JPM",
+    "VOO",  # VOO (like SPY) is kept for benchmark/diversification
 ]
 
-RISK_OFF_SYMBOLS = [
-    # Bonds
-    "IEF",  # 7-10 Year Treasury Bond ETF
-    # Commodities & Currencies
-    "GLD",  # Gold
-    # Defensive Equities
-    "USMV",  # USA Minimum Volatility ETF
-]
-INDIVIDUAL_STOCKS = [
-    # --- Technology & AI Leaders ---
-    "NVDA",  # Unquestioned AI leader
-    "MSFT",  # Cloud & Enterprise AI
-    "AAPL",  # Consumer Tech Ecosystem
-    "GOOGL",  # Search & Digital Ads
-    "AMZN",  # E-commerce & Cloud (AWS)
-    "ASML",  # Semiconductor Equipment Monopoly
-    'META',  # Social Media & AI
-    'TSLA',  # Electric Vehicles & Energy
-    # --- Semiconductor Ecosystem (Deepened) ---
-    "ASML",  # Photolithography Monopoly
-    "LRCX",  # Lam Research: Wafer Fabrication Equipment
-    "TSM",  # Taiwan Semiconductor: Leading-edge Chip Manufacturing
-    "AMD",  # Advanced Micro Devices: Key competitor in CPU/GPU
-    # --- Financial & Industrial Blue Chips ---
-    "JPM",  # Top US Bank
-    # --- Industrials, Aerospace & Logistics (Diversified) ---
-    "GE",  # GE Aerospace: Aircraft Engines
-    "UPS",  # United Parcel Service: Global Logistics Leader
-    # --- Health Care & Consumer Staples ---
-    "LLY",  # Pharma Giant (for Eli Lilly) - NOTE: LLY is a better choice than others now
-    "COST",  # Premier Warehouse Retailer
-    # --- Energy ---
-    "XOM",  # Supermajor Energy Producer
-    'COST', 'WMT', 'PG', 'KO', 'PEP', 'MDLZ', 'CL'  # Consumer Staples Giants
+# Sub-Group 2: SELECT CYCLICAL / REVERSAL UNIVERSE
+# These stocks showed moderate success. They are often cyclical and may be good
+# candidates for the reversal alpha module, but require careful management.
+# This list is heavily curated from the original.
+SELECT_CYCLICAL_REVERSAL = [
+    "AAPL",  # Profitable, but lower win-rate. Kept for its market influence.
+    "AMZN",  # Strong long-term performer.
+    "MSFT",  # Core tech holding.
+    "GOOGL",  # Core tech holding.
+    "UNH",  # Leader in healthcare.
+    "JNJ",  # Defensive qualities, moderately positive PnL.
+    "V",  # Strong financials performer.
+    "MA",
+    "HD",
+    "LLY",  # Positive PnL, important sector.
+    "PYPL",
+    "RTX",
 ]
 
 
-# Combined symbol list for data fetching
-SYMBOLS = list(set(RISK_ON_SYMBOLS + RISK_OFF_SYMBOLS + INDIVIDUAL_STOCKS))
+# --- PRIMARY RISK-OFF UNIVERSE ---
+# Drastically simplified. The model is not effective at trading most defensive ETFs.
+# We retain only the most essential, uncorrelated safe-haven assets.
+PRIMARY_RISK_OFF_UNIVERSE = [
+    "GLD",  # Gold: The primary safe haven. Showed positive PnL.
+    "KO",  # Coca-Cola: Showed surprisingly high Profit Factor in limited trades.
+    "PG",  # Procter & Gamble: Also showed high Profit Factor.
+]
 
-# Conservative and Aggressive symbol groups for strategy allocation
-CONSERVATIVE_SYMBOLS = RISK_OFF_SYMBOLS
-AGGRESSIVE_INDIVIDUAL_STOCKS = INDIVIDUAL_STOCKS
 
-# === Date and Time Settings ===
-DATA_START_DATE = "2000-01-01"  # Historical data fetch start
-BACKTEST_START_DATE = "2010-01-01"  # Strategy backtest start
-WARMUP_PERIOD_DAYS = 252
+# --- DERIVED UNIVERSES ---
+# This section automatically combines the lists above. You don't need to change it.
+PRIMARY_RISK_ON_UNIVERSE = list(set(CORE_MOMENTUM_UNIVERSE + SELECT_CYCLICAL_REVERSAL))
+RISK_ON_SYMBOLS = list(set(PRIMARY_RISK_ON_UNIVERSE))
+RISK_OFF_SYMBOLS = list(set(PRIMARY_RISK_OFF_UNIVERSE))
+SYMBOLS = list(set(RISK_ON_SYMBOLS + RISK_OFF_SYMBOLS))
+
+# For compatibility with UnifiedDataManager (fetches data for individual stocks)
+INDIVIDUAL_STOCKS = list(set(RISK_ON_SYMBOLS + RISK_OFF_SYMBOLS) - {"VOO", "GLD"})
+# ============================================================================
+# DATA FETCHING CONFIGURATION
+# ============================================================================
+
+# Date ranges
+DATA_START_DATE = "1990-01-01"  # Historical data fetch start
+BACKTEST_START_DATE = "2000-01-01"  # Strategy backtest start
 BACKTEST_END_DATE = "2025-08-01"  # Strategy backtest end
-INITIAL_CAPITAL = 100000.0  # Starting capital for backtests
+WARMUP_PERIOD_DAYS = 252  # Technical indicator warmup
+GLOBAL_RANDOM_SEED = 42  # For reproducibility
+INITIAL_CAPITAL = 100000.0  # Initial capital for backtests
 
-# === Cache and Storage Configuration ===
+# Data source toggles
+ENABLE_FUNDAMENTAL_DATA = False  # Deprecated for 3-factor model
+ENABLE_MACRO_DATA = True  # NEW: Enable for enhanced market detection
+
+# Cache and storage
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cache")
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 PROCESSED_DATA_CACHE_PATH = os.path.join(CACHE_DIR, "all_processed_data.parquet")
 
-# === Macro Economic Indicators Configuration ===
+# ============================================================================
+# PERFORMANCE AND CACHING
+# ============================================================================
+
+GARCH_LOOKBACK_DAYS = 1000  # Number of days for fitting the GARCH model.
+BETA_CACHE_MAX_AGE_DAYS = (
+    20  # How many days to keep a calculated beta value before re-calculating.
+)
+BETA_CACHE_MAX_SIZE = 100  # The maximum number of beta sets to store in memory.
+
+# ============================================================================
+# MACRO ECONOMIC INDICATORS (Data Layer Only)
+# ============================================================================
+
+# Define available macro indicators organized by category
 MACRO_INDICATORS = {
     "interest_rates": {
         "DFF": "Federal Funds Rate",
@@ -104,7 +151,7 @@ MACRO_INDICATORS = {
     },
 }
 
-# Flatten macro indicators for data fetching
+# Flatten for fetcher (all available indicators)
 ACTIVE_MACRO_INDICATORS = {
     **MACRO_INDICATORS["interest_rates"],
     **MACRO_INDICATORS["inflation"],
@@ -112,27 +159,9 @@ ACTIVE_MACRO_INDICATORS = {
     **MACRO_INDICATORS["economic_activity"],
 }
 
-# === Data Ingestion Settings ===
-DATA_INGESTION_SETTINGS = {
-    "default": {"start_date": "2000-01-01", "end_date": None},
-    "yahoo_finance": {"start_date": "2000-01-01", "end_date": None},
-    "fred_macro": {
-        "start_date": "2000-01-01",
-        "end_date": None,
-        "indicators": ACTIVE_MACRO_INDICATORS,
-    },
-}
-
-# Update frequency mapping for different data types
-DATA_UPDATE_FREQUENCY = {
-    "high_frequency": 30,  # Daily data like rates, VIX
-    "monthly": 90,  # Monthly economic data
-    "quarterly": 180,  # Quarterly reports like GDP
-}
-
-# Macro indicator frequency classification
+# Update frequency for MacroDataFetcher
 MACRO_INDICATOR_FREQUENCY_MAP = {
-    # High Frequency (daily/weekly updates)
+    # High frequency (daily/weekly)
     "DFF": "high_frequency",
     "DGS10": "high_frequency",
     "DGS2": "high_frequency",
@@ -142,7 +171,7 @@ MACRO_INDICATOR_FREQUENCY_MAP = {
     "VIXCLS": "high_frequency",
     "WALCL": "high_frequency",
     "T5YIE": "high_frequency",
-    # Monthly updates
+    # Monthly
     "CPIAUCSL": "monthly",
     "CPILFESL": "monthly",
     "UNRATE": "monthly",
@@ -151,28 +180,22 @@ MACRO_INDICATOR_FREQUENCY_MAP = {
     "HOUST": "monthly",
     "M2SL": "monthly",
     "DFEDTARU": "monthly",
-    # Quarterly updates
+    # Quarterly
     "GDP": "quarterly",
 }
 
-# === Data Validation Settings ===
-MIN_DATA_POINTS = 252  # Minimum trading days for valid backtest
-MIN_SYMBOLS_REQUIRED = 10  # Minimum symbols needed to proceed
-MAX_MISSING_DATA_PCT = 0.1  # Maximum allowable missing data percentage
+# ============================================================================
+# DATA VALIDATION
+# ============================================================================
 
-# === Logging Configuration ===
+MIN_DATA_POINTS = 252  # Minimum trading days for valid backtest
+MIN_SYMBOLS_REQUIRED = 10  # Minimum symbols needed
+MAX_MISSING_DATA_PCT = 0.1  # Max allowable missing data
+
+# ============================================================================
+# LOGGING
+# ============================================================================
+
 LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_FILE = "quantitative_strategy.log"
-
-if __name__ == "__main__":
-    print("--- Running general_config.py for testing ---")
-    print(f"Optimized Risk-on ETFs: {len(RISK_ON_SYMBOLS)}")
-    print(f"Optimized Risk-off ETFs: {len(RISK_OFF_SYMBOLS)}")
-    print(f"Optimized Individual Stocks: {len(INDIVIDUAL_STOCKS)}")
-    print(f"General config loaded: {len(SYMBOLS)} total symbols")
-    print(
-        f"Risk-on assets: {len(RISK_ON_SYMBOLS)}, Risk-off assets: {len(RISK_OFF_SYMBOLS)}"
-    )
-    print(f"Individual stocks: {len(INDIVIDUAL_STOCKS)}")
-    print(f"Macro indicators: {len(ACTIVE_MACRO_INDICATORS)}")

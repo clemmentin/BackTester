@@ -1,29 +1,24 @@
-# Event-Driven Backtesting Engine for Quantitative Strategies
-An institutional-grade, event-driven backtesting framework built from scratch in Python. It is designed for the rigorous research, development, and validation of sophisticated quantitative trading strategies.
+# Event-Driven Backtester for Quantitative Strategies
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+An event-driven backtesting framework in Python for developing and testing quantitative trading strategies, built with a focus on modularity and clear logic.
 
 ---
 
 ### Key Features
 
--   **Intelligent Alpha Engine:** A central "brain" that fuses signals from multiple alpha sources (e.g., momentum, technicals) using dynamic, market-regime-aware weighting. It leverages parallel processing for high-performance computation.
-
--   **Proactive Risk Management:** A multi-factor `RiskManager` that calculates a composite risk score to determine a global `RiskMode` (e.g., `Normal`, `Defensive`), which directly influences position sizing and signal generation.
-
--   **Robust Optimization Suite:** Features **Walk-Forward Optimization (WFO)** and **Bayesian Optimization** (`scikit-optimize`) to rigorously test strategy robustness and prevent overfitting.
-
--   **Interactive Analysis Dashboard:** A comprehensive dashboard built with `Streamlit` and `Plotly` for in-depth visualization of performance, risk metrics, and simulation results.
-
--   **Resilient Data Pipeline:** A full-featured data pipeline with **PostgreSQL** integration for efficient data fetching, feature engineering, and caching.
+-   **Event-Driven Engine:** A from-scratch implementation that handles market data, signals, orders, and fills sequentially to realistically simulate trading.
+-   **Modular 4-Layer Architecture:** Separates signal generation (4-factor alpha model), strategy filtering, risk management, and portfolio construction into distinct, logical layers.
+-   **Dynamic Risk Management:** Automatically adjusts portfolio exposure and position count based on market conditions and portfolio drawdown.
+-   **Walk-Forward Optimization:** Includes a framework to test strategy robustness and find optimal parameters over rolling time windows.
+-   **Efficient Data Pipeline:** Fetches market and economic data with a robust caching system (database-first with a file-based fallback) to speed up runs.
+-   **Detailed Performance Analysis:** Generates comprehensive reports and interactive `Plotly` dashboards to visualize backtest results.
 
 ---
 
-### Tech Stack
+### Core Tech
 
--   **Core Engine:** Python, Multiprocessing
--   **Quantitative & Data:** Pandas, NumPy, TA-Lib, scikit-optimize, ARCH
--   **Database & Pipeline:** PostgreSQL, SQLAlchemy, yfinance, fredapi
--   **Visualization & Web:** Streamlit, Plotly, Matplotlib
--   **Development:** Git
+**Python | Pandas | NumPy | Statsmodels | Plotly | scikit-optimize | yfinance**
 
 ---
 
@@ -31,24 +26,25 @@ An institutional-grade, event-driven backtesting framework built from scratch in
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/clemmentin/BackTester.git
+    git clone https://github.com/your-username/your-repo-name.git
+    cd your-repo-name
     ```
 
-2.  **Install dependencies:**
+2.  **Set up environment and install dependencies:**
     ```bash
+    python -m venv .venv
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
     pip install -r requirements.txt
     ```
 
-3.  **Configure environment:**
-    Create a `.env` file in the root directory and set up your database credentials. 
-
-4.  **Set up the database:**
-    This command will create the necessary database and tables.
+3.  **Configure API Key (Optional):**
+    To fetch macroeconomic data, create a `.env` file with your FRED API key:
     ```bash
-    python data_pipeline/db_setup.py
+    echo "FRED_API_KEY=your_api_key_here" > .env
     ```
-5.  **Run a full data pipeline and backtest:**
-    This script will handle data ingestion, feature engineering, and execute a backtest using the default configuration.
+
+4.  **Run the backtest:**
     ```bash
     python main.py
     ```
+    *(An interactive HTML report will be generated in the project directory.)*

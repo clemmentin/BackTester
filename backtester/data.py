@@ -7,7 +7,6 @@ import pandas as pd
 import talib
 from dotenv import load_dotenv
 
-from data_pipeline.prepare_data import pandas_rsi
 
 from .events import MarketEvent
 
@@ -63,7 +62,7 @@ class HistoricCSVDataHandler(DataHandler):
             file_path = f"{self.csv_dir}/{s}.csv"
             price_data = pd.read_csv(file_path, header=0, index_col=0, parse_dates=True)
             price_data["sma200"] = price_data["Close"].rolling(window=200).mean()
-            price_data["rsi"] = pandas_rsi(price_data["Close"], timeperiod=14)
+            # price_data["rsi"] = pandas_rsi(price_data["Close"], timeperiod=14)
             if self.signal_data is not None:
                 combined_data = price_data.merge(
                     self.signal_data, left_index=True, right_index=True, how="left"
@@ -110,11 +109,13 @@ class HistoricDBDataHandler(DataHandler):
         self.symbol_list = symbol_list
         self.latest_symbol_data = {}
         self.continue_backtest = True
-        self.all_data = None
+        self.sliced_data_by_time = None
         self.timeline = None
         self.current_time_index = 0
+
         self._load_preprocessed_data(all_processed_data, start_date)
-        self.enable_lookahead_check = False
+
+        self.enable_lookahead_check = True
 
     def _validate_vol_forecast(self, symbol, current_timestamp, row):
         if not self.enable_lookahead_check:
@@ -134,16 +135,21 @@ class HistoricDBDataHandler(DataHandler):
         return row.get("vol_forecast", 20.0)
 
     def _load_preprocessed_data(self, all_processed_data, start_date=None):
-        print("DATA_HANDLER: Loading pre-processed data...")
+        print("DATA_HANDLER: Loading and pre-slicing data for fast iteration...")
         if all_processed_data is None or all_processed_data.empty:
             print("DATA_HANDLER ERROR: Received empty or None DataFrame.")
             self.continue_backtest = False
             return
         try:
-            self.all_data = all_processed_data
-            self.timeline = sorted(
-                self.all_data.index.get_level_values("timestamp").unique()
+            self.sliced_data_by_time = {
+                ts: group.droplevel(0)
+                for ts, group in all_processed_data.groupby(level="timestamp")
+            }
+            self.timeline = sorted(self.sliced_data_by_time.keys())
+            print(
+                f"DATA_HANDLER: Pre-slicing complete. {len(self.timeline)} timestamps loaded."
             )
+
             if start_date:
                 start_datetime = pd.to_datetime(start_date)
                 start_index = np.searchsorted(
@@ -160,9 +166,9 @@ class HistoricDBDataHandler(DataHandler):
                         f"DATA_HANDLER WARNING: Start date {start_date} is after the last data point."
                     )
                     self.continue_backtest = False
-            print("DATA_HANDLER: Pre-processed data loaded successfully.")
+
         except Exception as e:
-            print(f"DATA_HANDLER ERROR: Failed to load pre-processed data. {e}")
+            print(f"DATA_HANDLER ERROR: Failed to load or preprocess data. {e}")
             self.continue_backtest = False
 
     def update_bars(self):
@@ -173,7 +179,7 @@ class HistoricDBDataHandler(DataHandler):
         current_timestamp = self.timeline[self.current_time_index]
 
         try:
-            todays_data = self.all_data.xs(current_timestamp, level="timestamp")
+            todays_data = self.sliced_data_by_time[current_timestamp]
         except KeyError:
             self.current_time_index += 1
             return

@@ -1,5 +1,3 @@
-# data_pipeline/data_fetchers/stock_fetcher.py
-
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path

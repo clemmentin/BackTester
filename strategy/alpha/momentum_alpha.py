@@ -1,396 +1,171 @@
 import logging
-from dataclasses import dataclass
-from functools import lru_cache
-from typing import Dict, List, Optional, Tuple
-
+from typing import Dict
 import numpy as np
 import pandas as pd
-
-from .technical_alpha import AlphaSignal, AlphaSignalType
+from strategy.contracts import RawAlphaSignal
 
 
 class MomentumAlphaModule:
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
+        momentum_params = kwargs.get("momentum_alpha_params", {})
 
-        # Multi-timeframe momentum windows
-        self.momentum_windows = {
-            "ultra_short": kwargs.get("momentum_ultra_short", 5),
-            "short": kwargs.get("momentum_short", 10),
-            "medium": kwargs.get("momentum_medium", 20),
-            "long": kwargs.get("momentum_long", 60),
-            "ultra_long": kwargs.get("momentum_ultra_long", 120),
-        }
+        # --- Core Momentum Parameters ---
+        self.formation_period = momentum_params.get("formation_period", 84)
+        self.skip_period = momentum_params.get("skip_period", 14)
+        self.min_absolute_momentum = momentum_params.get("min_absolute_momentum", 0.02)
+        self.min_confidence = momentum_params.get("min_confidence", 0.25)
 
-        # Momentum calculation parameters
-        self.min_momentum_threshold = kwargs.get("min_momentum_threshold", -0.15)
-        self.momentum_acceleration = kwargs.get("momentum_acceleration", True)
-        self.volume_confirmation = kwargs.get("volume_confirmation", True)
-        self.relative_strength = kwargs.get("relative_strength", True)
+        # --- Volatility Control ---
+        self.use_volatility_control = momentum_params.get(
+            "use_volatility_control", True
+        )
+        self.max_volatility_percentile = momentum_params.get(
+            "max_volatility_percentile", 0.90
+        )
 
-        # Pre-computed timeframe weights
-        self.timeframe_weights = {
-            "ultra_short": kwargs.get("weight_ultra_short", 0.10),
-            "short": kwargs.get("weight_short", 0.25),
-            "medium": kwargs.get("weight_medium", 0.35),
-            "long": kwargs.get("weight_long", 0.20),
-            "ultra_long": kwargs.get("weight_ultra_long", 0.10),
-        }
+        # --- Quality Filter ---
+        self.use_quality_filter = momentum_params.get("use_quality_filter", True)
+        self.high_dd_penalty = momentum_params.get(
+            "high_dd_penalty", 0.20
+        )  # PENALTY not bonus
+        self.max_dd_threshold = momentum_params.get(
+            "max_dd_threshold", 0.15
+        )  # Penalize DD > 15%
 
-        # Normalize weights once
-        total_weight = sum(self.timeframe_weights.values())
-        if abs(total_weight - 1.0) > 0.01:
-            self.timeframe_weights = {
-                k: v / total_weight for k, v in self.timeframe_weights.items()
-            }
+        self.logger.info(
+            f"MomentumAlpha [V7-Corrected]: Raw momentum with quality penalty for high drawdown"
+        )
 
-        # Risk adjustment parameters
-        self.volatility_scaling = kwargs.get("volatility_scaling", True)
-        self.max_volatility_threshold = kwargs.get("max_volatility_threshold", 0.40)
-        self.target_volatility = kwargs.get("target_volatility", 0.15)
-
-        # Signal filtering
-        self.min_confidence = kwargs.get("min_confidence", 0.3)
-        self.require_positive_medium = kwargs.get("require_positive_medium", True)
-
-        # Pre-compute constants
-        self.sqrt_252 = np.sqrt(252)
-
-        # Cache for market momentum
-        self.market_momentum_cache = {}
-        self.cache_timestamp = None
-
-        # Pre-compute regime multipliers
-        self.regime_multipliers = {
-            "BULL": 1.2,
-            "STRONG_BULL": 1.3,
-            "NORMAL": 1.0,
-            "BEAR": 0.7,
-            "CRISIS": 0.5,
-        }
+    def _calculate_max_drawdown(self, price_series: pd.Series) -> float:
+        """Calculate maximum drawdown during the formation period."""
+        running_max = price_series.expanding(min_periods=1).max()
+        drawdown = (running_max - price_series) / running_max
+        return drawdown.max()
 
     def calculate_batch_momentum_signals(
         self,
-        preprocessed_data: Dict[str, Dict],
+        prices: pd.DataFrame,
+        volumes: pd.DataFrame,
         timestamp: pd.Timestamp,
         market_regime: str = "NORMAL",
-    ) -> Dict[str, AlphaSignal]:
-        if not preprocessed_data:
+    ) -> Dict[str, RawAlphaSignal]:
+
+        # --- 1. Basic Validation ---
+        if prices.empty or timestamp not in prices.index:
             return {}
 
-        # Update market momentum once for all symbols
-        if self.relative_strength:
-            self._update_market_momentum_batch(preprocessed_data, timestamp)
+        required_len = self.formation_period + self.skip_period
+        if len(prices) < required_len:
+            return {}
 
-        momentum_signals = {}
+        end_date_loc = prices.index.get_loc(timestamp)
+        formation_end_date = prices.index[end_date_loc - self.skip_period]
+        formation_start_date = prices.index[end_date_loc - required_len]
 
-        # Batch compute all momentum scores
-        all_momentum_data = {}
+        # --- 2. Calculate RAW MOMENTUM (IC=0.0622) ---
+        price_slice = prices.loc[formation_start_date:formation_end_date]
+        start_prices = price_slice.iloc[0]
+        end_prices = price_slice.iloc[-1]
 
-        for symbol, data_dict in preprocessed_data.items():
-            try:
-                prices = data_dict["prices"]
+        raw_momentum = (end_prices / start_prices) - 1.0
+        raw_momentum = raw_momentum.dropna()
 
-                # Skip if insufficient data
-                min_required = max(self.momentum_windows.values())
-                if len(prices) < min_required:
-                    continue
+        if raw_momentum.empty:
+            return {}
 
-                # Calculate all timeframe momentums at once
-                momentum_scores = self._calculate_all_momentums_vectorized(prices)
+        # Filter minimum momentum
+        raw_momentum = raw_momentum[raw_momentum > self.min_absolute_momentum]
+        if raw_momentum.empty:
+            return {}
 
-                if momentum_scores:
-                    all_momentum_data[symbol] = {
-                        "scores": momentum_scores,
-                        "prices": prices,
-                        "volumes": data_dict.get("volumes"),
-                    }
+        df = pd.DataFrame(raw_momentum, columns=["raw_momentum"])
 
-            except Exception as e:
-                self.logger.debug(f"Error calculating momentum for {symbol}: {e}")
+        # --- 3. Calculate Returns for Volatility ---
+        log_returns = np.log(price_slice / price_slice.shift(1)).dropna()
 
-        # Now compute signals with all data available
-        regime_multiplier = self.regime_multipliers.get(market_regime, 1.0)
+        # --- 4. Volatility Filter ---
+        if self.use_volatility_control:
+            volatility = log_returns[df.index].std() * np.sqrt(252)
+            vol_threshold = volatility.quantile(self.max_volatility_percentile)
+            df = df[volatility[df.index] <= vol_threshold]
 
-        for symbol, mom_data in all_momentum_data.items():
-            signal = self._create_momentum_signal(
-                symbol, mom_data, timestamp, market_regime, regime_multiplier
+            if df.empty:
+                return {}
+
+        # --- 5. Calculate Quality Indicators ---
+        if self.use_quality_filter:
+            # Max Drawdown: IC=-0.1069, so HIGH DD = WEAK quality = PENALTY
+            df["max_drawdown"] = price_slice[df.index].apply(
+                self._calculate_max_drawdown
             )
 
-            if signal and signal.confidence >= self.min_confidence:
-                momentum_signals[symbol] = signal
+            # Positive days ratio
+            df["pos_days_ratio"] = (log_returns[df.index] > 0).sum() / log_returns[
+                df.index
+            ].count()
 
-        return momentum_signals
+            # --- 6. Calculate Scores (REWRITTEN BASED ON DIAGNOSTIC DATA) ---
+            df["base_score"] = (df["raw_momentum"].rank(pct=True) - 0.5) * 2.0
 
-    def _calculate_all_momentums_vectorized(
-        self, prices: np.ndarray
-    ) -> Dict[str, float]:
-        """Vectorized momentum calculation for all timeframes"""
-        momentum_scores = {}
-        current_price = prices[-1]
+            if self.use_quality_filter:
+                drawdown_percentile = df["max_drawdown"].rank(pct=True)
+                drawdown_score = (drawdown_percentile - 0.5) * 2.0
 
-        # Calculate all momentums in one pass
-        for timeframe, window in self.momentum_windows.items():
-            if len(prices) >= window:
-                momentum_scores[timeframe] = (current_price / prices[-window]) - 1
+                pos_days_percentile = df["pos_days_ratio"].rank(pct=True)
+                smoothness_score = (
+                    0.5 - pos_days_percentile
+                ) * 2.0  # Scaled to [-1, 1]
 
-        return momentum_scores
+                # --- 7. Combine Scores with Data-Driven Weights ---
+                base_weight = 0.40  # Raw momentum IC: ~0.05
+                drawdown_weight = 0.50  # Max Drawdown IC: ~0.10 (Strongest Signal!)
+                smoothness_weight = (
+                    0.10  # Positive Days Ratio IC: ~ -0.02 (Weakest Signal)
+                )
 
-    def _create_momentum_signal(
-        self,
-        symbol: str,
-        mom_data: Dict,
-        timestamp: pd.Timestamp,
-        market_regime: str,
-        regime_multiplier: float,
-    ) -> Optional[AlphaSignal]:
-        """Create momentum signal from computed data"""
-        momentum_scores = mom_data["scores"]
-        prices = mom_data["prices"]
-        volumes = mom_data["volumes"]
+                df["score"] = (
+                    df["base_score"] * base_weight
+                    + drawdown_score * drawdown_weight
+                    + smoothness_score * smoothness_weight
+                )
+            else:
+                df["score"] = df["base_score"]
 
-        # Fast factor calculations
-        acceleration_factor = 1.0
-        if self.momentum_acceleration:
-            acceleration_factor = self._calculate_acceleration_fast(momentum_scores)
+            # --- 8. Final Clipping ---
+            df["score"] = df["score"].clip(-1.0, 1.0)
 
-        volume_factor = 1.0
-        if self.volume_confirmation and volumes is not None:
-            volume_factor = self._calculate_volume_confirmation_fast(prices, volumes)
+        df["final_percentile"] = df["score"].rank(method="average", pct=True)
 
-        relative_strength_factor = 1.0
-        if self.relative_strength:
-            relative_strength_factor = self._calculate_relative_strength_fast(
-                momentum_scores, symbol
+        # --- 9. Confidence Based on Signal Strength ---
+        dist_from_median = (df["final_percentile"] - 0.5).abs()
+
+        # Higher confidence for more extreme positions
+        conds = [dist_from_median > 0.35, dist_from_median > 0.25]
+        choices = [0.75, 0.60]
+        df["confidence"] = np.select(conds, choices, default=0.40)
+
+        # --- 10. Final Filtering ---
+        final_df = df[df["confidence"] >= self.min_confidence].copy()
+        if final_df.empty:
+            return {}
+
+        # --- 11. Generate Signals ---
+        return {
+            symbol: RawAlphaSignal(
+                symbol=symbol,
+                score=float(np.clip(row.score, -1.0, 1.0)),
+                confidence=float(np.clip(row.confidence, 0.3, 0.95)),
+                components={
+                    "raw_momentum": float(row.raw_momentum),
+                    "final_percentile": float(row.final_percentile),
+                    "max_drawdown": float(row.get("max_drawdown", 0)),
+                    "pos_days_ratio": float(row.get("pos_days_ratio", 0)),
+                    "quality_penalty_applied": bool(
+                        self.use_quality_filter
+                        and row.get("max_drawdown", 0) > self.max_dd_threshold
+                    ),
+                },
             )
-
-        volatility_factor = 1.0
-        if self.volatility_scaling:
-            volatility_factor = self._calculate_volatility_adjustment_fast(prices)
-
-        # Combine factors efficiently
-        base_score = sum(
-            momentum_scores.get(tf, 0) * self.timeframe_weights.get(tf, 0)
-            for tf in self.momentum_windows.keys()
-        )
-
-        # Apply all factors at once
-        composite_score = (
-            base_score
-            * acceleration_factor
-            * volume_factor
-            * relative_strength_factor
-            * volatility_factor
-            * regime_multiplier
-        )
-
-        # Quick confidence calculation
-        positive_count = sum(1 for v in momentum_scores.values() if v > 0)
-        consistency = positive_count / len(momentum_scores) if momentum_scores else 0
-
-        # Factor alignment
-        factors = [
-            acceleration_factor,
-            volume_factor,
-            relative_strength_factor,
-            volatility_factor,
-        ]
-        factor_mean = sum(factors) / len(factors)
-        factor_alignment = (factor_mean - 1.0 + 0.5) * 0.4
-
-        confidence = consistency * 0.6 + factor_alignment
-        confidence = np.clip(confidence, 0, 1)
-
-        # Apply medium momentum filter if required
-        if self.require_positive_medium and momentum_scores.get("medium", 0) < 0:
-            composite_score *= 0.5
-
-        # Clip final score
-        composite_score = np.clip(composite_score, -1, 1)
-
-        # Create signal
-        components = {
-            "momentum_composite": composite_score,
-            "acceleration": acceleration_factor,
-            "volume_confirmation": volume_factor,
-            "relative_strength": relative_strength_factor,
-            "volatility_adjustment": volatility_factor,
+            for symbol, row in final_df.iterrows()
         }
-        components.update({f"momentum_{k}": v for k, v in momentum_scores.items()})
-
-        return AlphaSignal(
-            symbol=symbol,
-            signal_type=AlphaSignalType.MOMENTUM,
-            score=composite_score,
-            confidence=confidence,
-            components=components,
-            timestamp=timestamp,
-            metadata={
-                "market_regime": market_regime,
-                "timeframes_positive": positive_count,
-                "strongest_timeframe": max(
-                    momentum_scores.items(), key=lambda x: abs(x[1])
-                )[0],
-            },
-        )
-
-    def _calculate_acceleration_fast(self, momentum_scores: Dict[str, float]) -> float:
-        """Fast acceleration calculation"""
-        if len(momentum_scores) < 3:
-            return 1.0
-
-        # Pre-computed groupings
-        shorter_scores = [
-            momentum_scores.get("ultra_short", 0),
-            momentum_scores.get("short", 0),
-        ]
-        longer_scores = [
-            momentum_scores.get("long", 0),
-            momentum_scores.get("ultra_long", 0),
-        ]
-
-        shorter_avg = sum(shorter_scores) / len(shorter_scores)
-        longer_avg = sum(longer_scores) / len(longer_scores)
-
-        if abs(longer_avg) > 1e-6:
-            acceleration = shorter_avg / abs(longer_avg)
-            return np.clip(0.5 + acceleration * 0.5, 0.5, 1.5)
-
-        return 1.0
-
-    def _calculate_volume_confirmation_fast(
-        self, prices: np.ndarray, volumes: np.ndarray
-    ) -> float:
-        """Fast volume confirmation"""
-        window = min(20, len(prices) - 1, len(volumes))
-        if window < 5:
-            return 1.0
-
-        # Use slicing for efficiency
-        price_changes = np.diff(prices[-window - 1 :])
-        volume_data = volumes[-window:]
-
-        if len(price_changes) != len(volume_data):
-            return 1.0
-
-        avg_volume = np.mean(volume_data)
-        if avg_volume == 0:
-            return 1.0
-
-        # Vectorized calculation
-        up_mask = price_changes > 0
-        up_volume = np.mean(volume_data[up_mask]) if np.any(up_mask) else avg_volume
-        down_volume = np.mean(volume_data[~up_mask]) if np.any(~up_mask) else avg_volume
-
-        if down_volume > 0:
-            volume_ratio = up_volume / down_volume
-            return np.clip(0.8 + (volume_ratio - 1) * 0.2, 0.8, 1.2)
-
-        return 1.1
-
-    def _calculate_relative_strength_fast(
-        self, momentum_scores: Dict[str, float], symbol: str
-    ) -> float:
-        """Fast relative strength calculation"""
-        if not self.market_momentum_cache:
-            return 1.0
-
-        symbol_avg_momentum = sum(momentum_scores.values()) / len(momentum_scores)
-        market_avg_momentum = self.market_momentum_cache.get("market_average", 0)
-
-        if abs(market_avg_momentum) < 1e-6:
-            return 1.0
-
-        relative_strength = symbol_avg_momentum - market_avg_momentum
-        return np.clip(1.0 + relative_strength, 0.7, 1.3)
-
-    def _calculate_volatility_adjustment_fast(self, prices: np.ndarray) -> float:
-        """Fast volatility adjustment"""
-        if len(prices) < 20:
-            return 1.0
-
-        # Vectorized return calculation
-        returns = np.diff(prices[-20:]) / prices[-20:-1]
-        volatility = np.std(returns) * self.sqrt_252
-
-        # Pre-computed thresholds
-        if volatility > self.max_volatility_threshold:
-            return 0.5
-        elif volatility > self.target_volatility * 2:
-            return 0.7
-        elif volatility < self.target_volatility * 0.5:
-            return 1.2
-        else:
-            return 1.0
-
-    def _update_market_momentum_batch(
-        self, preprocessed_data: Dict, timestamp: pd.Timestamp
-    ):
-        """Batch update market momentum statistics"""
-        # Only update if needed (cache for 5 minutes)
-        if (
-            self.cache_timestamp
-            and (timestamp - self.cache_timestamp).total_seconds() < 300
-        ):
-            return
-
-        # Sample first 20 symbols for efficiency
-        sample_symbols = list(preprocessed_data.keys())[:20]
-
-        if not sample_symbols:
-            return
-
-        # Vectorized calculation
-        all_momentums = []
-        medium_window = self.momentum_windows["medium"]
-
-        for symbol in sample_symbols:
-            data = preprocessed_data[symbol]
-            prices = data["prices"]
-
-            if len(prices) >= medium_window:
-                momentum = (prices[-1] / prices[-medium_window]) - 1
-                all_momentums.append(momentum)
-
-        if all_momentums:
-            self.market_momentum_cache = {
-                "market_average": np.mean(all_momentums),
-                "market_median": np.median(all_momentums),
-                "market_std": np.std(all_momentums),
-                "timestamp": timestamp,
-            }
-            self.cache_timestamp = timestamp
-
-    # Legacy interface for backward compatibility
-    def calculate_momentum_signals(
-        self,
-        market_data: pd.DataFrame,
-        symbols: List[str],
-        timestamp: pd.Timestamp,
-        market_regime: str = "NORMAL",
-    ) -> Dict[str, AlphaSignal]:
-        """Legacy interface - converts to batch format"""
-        preprocessed_data = {}
-
-        for symbol in symbols:
-            try:
-                if symbol in market_data.index.get_level_values("symbol"):
-                    symbol_data = market_data.xs(symbol, level="symbol")
-                    symbol_data = symbol_data[symbol_data.index <= timestamp]
-
-                    min_required = max(self.momentum_windows.values())
-                    if len(symbol_data) >= min_required:
-                        preprocessed_data[symbol] = {
-                            "prices": symbol_data["close"].values,
-                            "volumes": (
-                                symbol_data["volume"].values
-                                if "volume" in symbol_data
-                                else None
-                            ),
-                        }
-            except Exception as e:
-                self.logger.debug(f"Error extracting data for {symbol}: {e}")
-
-        return self.calculate_batch_momentum_signals(
-            preprocessed_data, timestamp, market_regime
-        )

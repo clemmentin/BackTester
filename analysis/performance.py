@@ -16,14 +16,24 @@ def create_equity_curve_dataframe(all_holdings):
     if "timestamp" not in df.columns:
         print("PERFORMANCE ERROR: 'timestamp' column not found in holdings records.")
         return pd.DataFrame(columns=["cash", "total", "positions_value", "returns"])
+
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df.dropna(subset=["timestamp"], inplace=True)
     df.sort_values("timestamp", inplace=True)
+
     df.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
     df.set_index("timestamp", inplace=True)
     df.sort_index(inplace=True)
     df.index = pd.to_datetime(df.index)
-    df["positions_value"] = df.drop(columns=["cash", "total"]).sum(axis=1)
+    if df.index.duplicated().any():
+        print(
+            f"WARNING: Found {df.index.duplicated().sum()} duplicate timestamps after initial cleaning"
+        )
+        df = df[~df.index.duplicated(keep="last")]
+
+    df["positions_value"] = df.drop(columns=["cash", "total"], errors="ignore").sum(
+        axis=1
+    )
     df["returns"] = df["total"].pct_change()
     df["returns"].fillna(0, inplace=True)
     return df
@@ -275,10 +285,6 @@ def analyze_market_phases(equity_curve, benchmark_equity):
 def calculate_advanced_metrics(
     equity_curve: pd.DataFrame, initial_capital: float, risk_free_rate: float = 0.02
 ) -> dict:
-    """
-    REBUILT: A single, reliable function to calculate all key performance metrics.
-    This is now the single source of truth for performance calculation.
-    """
     if equity_curve.empty or len(equity_curve) < 20:
         return {"error": "Insufficient data for performance calculation."}
 
@@ -372,7 +378,13 @@ def calculate_advanced_metrics(
 
 def _calculate_max_drawdown_duration(drawdown_series: pd.Series) -> int:
     """Calculates the longest period (in days) of being in a drawdown."""
+    if drawdown_series.index.duplicated().any():
+        drawdown_series = drawdown_series[
+            ~drawdown_series.index.duplicated(keep="last")
+        ]
+
     in_dd = drawdown_series < 0
+
     if not in_dd.any():
         return 0
     grouper = (in_dd != in_dd.shift()).cumsum()
@@ -381,9 +393,7 @@ def _calculate_max_drawdown_duration(drawdown_series: pd.Series) -> int:
 
     if dd_groups.ngroups == 0:
         return 0
-    max_duration_delta = dd_groups.apply(
-        lambda x: x.index[-1] - x.index[0]
-    ).max()
+    max_duration_delta = dd_groups.apply(lambda x: x.index[-1] - x.index[0]).max()
 
     return max_duration_delta.days
 
@@ -431,16 +441,6 @@ def generate_monthly_returns_table(equity_curve):
 
 
 def calculate_trade_stats_by_symbol(trades_df: pd.DataFrame):
-    """
-    Calculates detailed trading statistics for each symbol.
-
-    Args:
-        trades_df: DataFrame containing closed trades with columns like
-                   ['symbol', 'pnl'].
-
-    Returns:
-        A DataFrame with aggregated stats per symbol.
-    """
     if (
         trades_df is None
         or trades_df.empty

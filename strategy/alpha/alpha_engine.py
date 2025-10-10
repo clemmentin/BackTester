@@ -1,412 +1,278 @@
-# strategies/alpha/alpha_engine.py
-import hashlib
 import logging
-import os
-import pickle
-import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from collections import deque
 from enum import Enum
-from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
+from scipy import stats
 
-from .market_detector import MarketDetector, MarketRegime, MarketState
+import config
+from .alpha_normalization import AlphaNormalizer
+from .market_detector import MarketDetector, MarketState, MacroRegime, MarketRegime
+from .reversal_alpha import ReversalAlphaModule
+from .price_alpha import PriceAlphaModule
+from .liquidity_alpha import LiquidityAlphaModule
+from strategy.contracts import RawAlphaSignal, RawAlphaSignalDict
 from .momentum_alpha import MomentumAlphaModule
-from .technical_alpha import AlphaSignal, AlphaSignalType, TechnicalAlphaModule
-
-_worker_data = {}
-
-
-def init_worker(
-    preprocessed_data: Dict,
-    adjusted_weights: Dict,
-    market_state: MarketState,
-    timestamp: pd.Timestamp,
-    risk_on_symbols: set,
-    engine_params: Dict,
-):
-    """
-    Initializer for each worker process. It runs ONCE per process and loads all
-    necessary data into the worker's global scope, avoiding repeated serialization.
-    """
-    global _worker_data
-    _worker_data["preprocessed_data"] = preprocessed_data
-    _worker_data["adjusted_weights"] = adjusted_weights
-    _worker_data["market_state"] = market_state
-    _worker_data["timestamp"] = timestamp
-    _worker_data["risk_on_symbols"] = risk_on_symbols
-    _worker_data["engine_params"] = engine_params
-
-    # Modules are instantiated inside the worker to be process-safe.
-    _worker_data["momentum_module"] = MomentumAlphaModule(**engine_params)
-    _worker_data["technical_module"] = TechnicalAlphaModule(**engine_params)
-
-    # Optional: uncomment to verify that workers are initializing.
-    # print(f"Worker process {os.getpid()} has been initialized.")
-
-
-def _worker_compute_batch_signals(
-    symbol_batch: List[str],
-) -> Dict[str, "CompositeAlphaSignal"]:
-    """
-    This is the core function executed by each worker process. It's a top-level
-    function that gets its data from the global `_worker_data` storage.
-    """
-    global _worker_data
-    # Retrieve all necessary data from the worker's global storage
-    preprocessed_data = _worker_data["preprocessed_data"]
-    adjusted_weights = _worker_data["adjusted_weights"]
-    market_state = _worker_data["market_state"]
-    timestamp = _worker_data["timestamp"]
-    risk_on_symbols = _worker_data["risk_on_symbols"]
-    engine_params = _worker_data["engine_params"]
-    momentum_module = _worker_data["momentum_module"]
-    technical_module = _worker_data["technical_module"]
-
-    batch_signals = {}
-
-    # --- Alpha Calculation Logic ---
-    momentum_data = {
-        s: preprocessed_data[s]
-        for s in symbol_batch
-        if s in preprocessed_data and s in risk_on_symbols
-    }
-    technical_data = {
-        s: preprocessed_data[s] for s in symbol_batch if s in preprocessed_data
-    }
-
-    momentum_signals = (
-        momentum_module.calculate_batch_momentum_signals(
-            momentum_data, timestamp, market_state.regime.value
-        )
-        if momentum_data
-        else {}
-    )
-    technical_signals = (
-        technical_module.calculate_batch_alpha_signals(technical_data, timestamp)
-        if technical_data
-        else {}
-    )
-
-    # --- Signal Combination Logic ---
-    for symbol in symbol_batch:
-        symbol_signals = {}
-        if symbol in momentum_signals:
-            symbol_signals[AlphaSource.MOMENTUM] = momentum_signals[symbol]
-        if symbol in technical_signals:
-            symbol_signals[AlphaSource.TECHNICAL] = technical_signals[symbol]
-
-        if symbol_signals:
-            composite_signal = _create_composite_signal_for_worker(
-                symbol,
-                symbol_signals,
-                adjusted_weights,
-                market_state,
-                timestamp,
-                engine_params,
-            )
-            if composite_signal:
-                batch_signals[symbol] = composite_signal
-    return batch_signals
-
-
-def _create_composite_signal_for_worker(
-    symbol: str,
-    signals_dict: Dict,
-    weights: Dict,
-    market_state: MarketState,
-    timestamp: pd.Timestamp,
-    params: Dict,
-) -> Optional["CompositeAlphaSignal"]:
-    """Helper function for signal combination inside a worker."""
-    total_score, total_confidence, total_weight = 0.0, 0.0, 0.0
-    for source, signal in signals_dict.items():
-        weight = weights.get(source, 0.0)
-        if weight > 0:
-            total_score += signal.score * weight
-            total_confidence += signal.confidence * weight
-            total_weight += weight
-
-    if total_weight == 0:
-        return None
-
-    final_score = total_score / total_weight
-    final_confidence = total_confidence / total_weight
-
-    min_conf = params.get("min_composite_confidence", 0.3)
-    min_score = params.get("min_composite_score", 0.2)
-
-    action = "hold"
-    if final_confidence >= min_conf:
-        if final_score > min_score:
-            action = "long"
-        elif final_score < -min_score:
-            action = "exit"
-
-    # Simplified but robust position sizing logic
-    size_multiplier = np.clip(final_confidence * abs(final_score) * 2.0, 0.3, 1.5)
-
-    return CompositeAlphaSignal(
-        symbol=symbol,
-        final_score=np.clip(final_score, -1, 1),
-        final_confidence=np.clip(final_confidence, 0, 1),
-        sources=signals_dict,
-        weights={k: v for k, v in weights.items() if k in signals_dict},
-        market_state=market_state,
-        timestamp=timestamp,
-        action=action,
-        position_size_multiplier=size_multiplier,
-    )
-
-
-# ============================================================================
-# AlphaEngine Supporting Enums and Dataclasses
-# ============================================================================
 
 
 class AlphaSource(Enum):
+
+    REVERSAL = "reversal"
+    PRICE = "price"
+    LIQUIDITY = "liquidity"
     MOMENTUM = "momentum"
-    TECHNICAL = "technical"
-    COMPOSITE = "composite"
-
-
-@dataclass
-class CompositeAlphaSignal:
-    symbol: str
-    final_score: float
-    final_confidence: float
-    sources: Dict[AlphaSource, AlphaSignal]
-    weights: Dict[AlphaSource, float]
-    market_state: MarketState
-    timestamp: pd.Timestamp
-    action: str
-    position_size_multiplier: float
-
-
-# ============================================================================
-# AlphaEngine Class
-# ============================================================================
 
 
 class AlphaEngine:
-    """
-    Optimized alpha signal fusion engine with improved performance.
-    """
-
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
-
-        # Store all kwargs to pass to workers
         self.all_params = kwargs.copy()
 
-        # Initialize modules for the main process (e.g., for sequential runs or market detection)
-        self.technical_module = TechnicalAlphaModule(**self.all_params)
+        # Initialize factor modules
+        self.reversal_module = ReversalAlphaModule(**self.all_params)
+        self.price_module = PriceAlphaModule(**self.all_params)
+        self.liquidity_module = LiquidityAlphaModule(**self.all_params)
         self.momentum_module = MomentumAlphaModule(**self.all_params)
         self.market_detector = MarketDetector(**self.all_params)
 
+        engine_params = self.all_params.get("alpha_engine", {})
+
+        # Base weights - calibrated based on long-term historical IC performance
         self.base_weights = {
-            AlphaSource.MOMENTUM: kwargs.get("momentum_weight", 0.40),
-            AlphaSource.TECHNICAL: kwargs.get("technical_weight", 0.35),
-            AlphaSource.COMPOSITE: kwargs.get("composite_weight", 0.25),
+            AlphaSource.REVERSAL: engine_params.get("reversal_weight", 0.35),
+            AlphaSource.PRICE: engine_params.get("price_weight", 0.10),
+            AlphaSource.LIQUIDITY: engine_params.get("liquidity_weight", 0.15),
+            AlphaSource.MOMENTUM: engine_params.get("momentum_weight", 0.40),
         }
-        total_weight = sum(self.base_weights.values())
-        if abs(total_weight - 1.0) > 0.01:
-            self.base_weights = {
-                k: v / total_weight for k, v in self.base_weights.items()
-            }
 
-        self.risk_on_symbols = set(kwargs.get("risk_on_symbols", []))
+        total_base = sum(self.base_weights.values())
+        self.base_weights = {k: v / total_base for k, v in self.base_weights.items()}
 
-        # Parallel processing settings
-        self.use_parallel = kwargs.get("use_parallel", True)
-        self.max_workers = kwargs.get(
-            "max_workers", max(1, os.cpu_count() - 1 if os.cpu_count() else 1)
+        # IC monitoring configuration
+        ic_params = self.all_params.get("ic_monitoring", {})
+        self.ic_enabled = ic_params.get("enabled", True)
+        self.ic_lookback = ic_params.get("lookback_period", 180)
+        self.fwd_return_period = ic_params.get("forward_return_period", 20)
+        self.ic_smoothing_alpha = ic_params.get("smoothing_alpha", 0.20)
+        self.ic_threshold = ic_params.get("ic_threshold", 0.02)
+        self.ic_strong_threshold = ic_params.get("ic_strong_threshold", 0.10)
+
+        # Historical data for IC calculation
+        self.factor_scores_history = deque(
+            maxlen=self.ic_lookback + self.fwd_return_period + 10
         )
-        self.batch_size = kwargs.get("batch_size", 100)
-        self.parallel_symbol_threshold = kwargs.get("parallel_symbol_threshold", 200)
+        self.prices_history = deque(
+            maxlen=self.ic_lookback + self.fwd_return_period + 10
+        )
+        self.smoothed_ic = {source: 0.0 for source in AlphaSource}
+        self.current_weights = self.base_weights.copy()
 
-        self.last_signals = {}
-        self.signal_history = []
+        # Signal combination strategy
+        self.combination_mode = engine_params.get("combination_mode", "smart_weighted")
+        self.conflict_threshold = engine_params.get("conflict_threshold", 0.6)
+
+        # Elite signal protection prioritizes the best factor if its signal is strong
+        self.elite_factor = AlphaSource.REVERSAL
+        self.elite_confidence_threshold = engine_params.get(
+            "elite_confidence_threshold", 0.75
+        )
+
+        # Weight constraints
+        self.min_weight = engine_params.get("min_factor_weight", 0.10)
+        self.max_weight = engine_params.get("max_factor_weight", 0.70)
+
+        # Quality filtering
+        quality_params = engine_params.get("signal_quality", {})
+        self.quality_filter_enabled = quality_params.get("enabled", True)
+        self.min_score_threshold = quality_params.get("min_score", 0.15)
+        self.min_confidence_threshold = quality_params.get("min_confidence", 0.30)
+
+        # Normalization
+        self.normalizer = AlphaNormalizer(**kwargs)
+        self.normalization_enabled = engine_params.get("normalization_enabled", True)
+
+        self.logger.info(
+            f"AlphaEngine initialized: "
+            f"Reversal={self.base_weights[AlphaSource.REVERSAL]:.0%}, "
+            f"Price={self.base_weights[AlphaSource.PRICE]:.0%}, "
+            f"Liquidity={self.base_weights[AlphaSource.LIQUIDITY]:.0%} | "
+            f"Mode={self.combination_mode}, "
+            f"Weights=[{self.min_weight:.0%}, {self.max_weight:.0%}]"
+        )
 
     def generate_alpha_signals(
-        self, market_data: pd.DataFrame, symbols: List[str], timestamp: pd.Timestamp
-    ) -> Dict[str, CompositeAlphaSignal]:
-
-        market_state = self.market_detector.detect_market_state(
-            market_data, timestamp, symbols
-        )
-        preprocessed_data = self._preprocess_market_data(
-            market_data, symbols, timestamp
-        )
-
-        if self.use_parallel and len(symbols) >= self.parallel_symbol_threshold:
-            self.logger.debug(
-                f"High workload ({len(symbols)} symbols), engaging PARALLEL alpha engine."
-            )
-            final_signals = self._parallel_compute_signals(
-                preprocessed_data, symbols, timestamp, market_state
-            )
-        else:
-            if self.use_parallel:
-                self.logger.debug(
-                    f"Low workload ({len(symbols)} symbols), using SEQUENTIAL alpha engine to avoid overhead."
-                )
-            final_signals = self._sequential_compute_signals(
-                preprocessed_data, symbols, timestamp, market_state
-            )
-
-        final_signals = self._apply_risk_filters(final_signals, market_state)
-
-        self.last_signals = final_signals
-        self._update_signal_history_batch(final_signals)
-        return final_signals
-
-    def _parallel_compute_signals(
         self,
-        preprocessed_data: Dict,
+        market_data: pd.DataFrame,
         symbols: List[str],
         timestamp: pd.Timestamp,
-        market_state: MarketState,
-    ) -> Dict:
+        fundamental_data: Optional[Dict[str, Dict]] = None,
+        macro_data: Optional[pd.DataFrame] = None,
+        market_state: Optional[MarketState] = None,
+    ) -> RawAlphaSignalDict:
         """
-        Manages the parallel computation of signals using a ProcessPoolExecutor.
+        Main function to generate alpha signals for a given timestamp.
         """
-        composite_signals = {}
-        adjusted_weights = self._adjust_weights_for_regime(market_state.regime)
+        if market_state is None:
+            market_state = self.market_detector.detect_market_state(
+                market_data, timestamp, symbols, macro_data=macro_data
+            )
 
-        # Arguments for the worker initializer function
-        init_args = (
-            preprocessed_data,
-            adjusted_weights,
-            market_state,
-            timestamp,
-            self.risk_on_symbols,
-            self.all_params,  # Pass all config params to the worker
+        factor_signals = self._generate_raw_factor_signals(
+            market_data, timestamp, market_state.regime.value
         )
 
-        with ProcessPoolExecutor(
-            max_workers=self.max_workers, initializer=init_worker, initargs=init_args
-        ) as executor:
-            symbol_batches = [
-                symbols[i : i + self.batch_size]
-                for i in range(0, len(symbols), self.batch_size)
-            ]
+        self._update_history_for_ic(timestamp, factor_signals, market_data)
 
-            # Submit the top-level worker function, NOT a class method
-            futures = [
-                executor.submit(_worker_compute_batch_signals, batch)
-                for batch in symbol_batches
-            ]
+        if self.ic_enabled:
+            self._update_ic_scores(timestamp)
 
-            for future in as_completed(futures):
-                try:
-                    composite_signals.update(
-                        future.result(timeout=120)
-                    )  # Increased timeout
-                except Exception as e:
-                    self.logger.error(
-                        f"A worker process encountered an error: {e}", exc_info=True
-                    )
-        return composite_signals
+        self.current_weights = self._get_dynamic_weights(market_state)
 
-    def _sequential_compute_signals(
-        self,
-        preprocessed_data: Dict,
-        symbols: List[str],
-        timestamp: pd.Timestamp,
-        market_state: MarketState,
-    ) -> Dict:
-
-        self.logger.info("Running alpha calculation sequentially.")
-        adjusted_weights = self._adjust_weights_for_regime(market_state.regime)
-
-        init_worker(
-            preprocessed_data,
-            adjusted_weights,
-            market_state,
-            timestamp,
-            self.risk_on_symbols,
-            self.all_params,
+        combined_signals = self._combine_signals_smart(
+            factor_signals, symbols, market_state
         )
-        all_signals = _worker_compute_batch_signals(symbols)
-        return all_signals
 
-    @lru_cache(maxsize=16)
-    def _adjust_weights_for_regime(
-        self, regime: MarketRegime
+        if self.normalization_enabled and combined_signals:
+            combined_signals = self.normalizer.normalize_factors(
+                combined_signals, market_data
+            )
+
+        ic_summary = ", ".join(
+            [f"{s.name}={self.smoothed_ic[s]:.3f}" for s in AlphaSource]
+        )
+        weight_summary = ", ".join(
+            [f"{s.name[0]}={self.current_weights[s]:.2f}" for s in AlphaSource]
+        )
+
+        self.logger.info(
+            f"Generated {len(combined_signals)} signals | Weights: {weight_summary} | IC: {ic_summary}"
+        )
+
+        return combined_signals
+
+    def _get_dynamic_weights(
+        self, market_state: MarketState
     ) -> Dict[AlphaSource, float]:
-        """
-        _adjust_weights_for_regime is a cached method that adjusts alpha weights based on the market regime.
-        """
-        # This can be expanded with more complex logic later
         return self.base_weights
 
-    def _preprocess_market_data(
-        self, market_data: pd.DataFrame, symbols: List[str], timestamp: pd.Timestamp
-    ) -> Dict:
-        """
-        Preprocesses and caches market data for all symbols to be used by workers.
-        """
-        max_lookback = 252
-        preprocessed = {}
-        for symbol in symbols:
-            try:
-                if symbol in market_data.index.get_level_values("symbol"):
-                    full_symbol_data = market_data.xs(symbol, level="symbol")
-                    symbol_data_up_to_ts = full_symbol_data[
-                        full_symbol_data.index <= timestamp
-                    ]
-                    symbol_data = symbol_data_up_to_ts.tail(max_lookback)
-                    if len(symbol_data) >= 20:  # Basic data check
-                        preprocessed[symbol] = {
-                            "prices": symbol_data["close"].values,
-                            "volumes": symbol_data.get(
-                                "volume", pd.Series(np.zeros(len(symbol_data)))
-                            ).values,
-                            "highs": symbol_data.get(
-                                "high", symbol_data["close"]
-                            ).values,
-                            "lows": symbol_data.get("low", symbol_data["close"]).values,
-                        }
-            except Exception as e:
-                self.logger.debug(f"Could not preprocess data for {symbol}: {e}")
-            return preprocessed
+    def _combine_signals_smart(
+        self,
+        factor_signals: Dict[AlphaSource, Dict],
+        symbols: List[str],
+        market_state: MarketState,
+    ) -> RawAlphaSignalDict:
+        final_signals = {}
+        for source, signals in factor_signals.items():
+            if signals:
+                for symbol, signal in signals.items():
+                    # If a symbol is signaled by multiple factors, the last one seen wins.
+                    # This is acceptable because the crucial ranking happens later in the normalizer.
+                    final_signals[symbol] = signal
 
-    def _apply_risk_filters(self, signals: Dict, market_state: MarketState) -> Dict:
-        """
-        Applies final risk filters, such as limiting the number of positions.
-        """
-        # Example: Limit max number of long positions based on market regime
-        max_positions = {
-            MarketRegime.CRISIS: 3,
-            MarketRegime.BEAR: 5,
-            MarketRegime.VOLATILE: 7,
-        }.get(
-            market_state.regime, 12
-        )  # Default max positions
+        return final_signals
 
-        long_signals = {s: sig for s, sig in signals.items() if sig.action == "long"}
+    def _generate_raw_factor_signals(
+        self, market_data: pd.DataFrame, timestamp: pd.Timestamp, regime: str
+    ) -> Dict[AlphaSource, Dict]:
+        today_data = market_data.loc[
+            market_data.index.get_level_values("timestamp") <= timestamp
+        ]
+        prices_df = today_data["close"].unstack(level="symbol")
+        opens_df = today_data["open"].unstack(level="symbol")
+        volumes_df = today_data["volume"].unstack(level="symbol")
 
-        if len(long_signals) > max_positions:
-            # Sort by a combined score of confidence and score, then trim
-            sorted_longs = sorted(
-                long_signals.items(),
-                key=lambda item: item[1].final_confidence * item[1].final_score,
-                reverse=True,
+        factor_signals = {
+            AlphaSource.REVERSAL: self.reversal_module.calculate_batch_reversal_trend_signals(
+                prices_df, volumes_df, timestamp, regime
+            ),
+            AlphaSource.PRICE: self.price_module.calculate_batch_price_signals(
+                prices_df, opens_df, volumes_df, timestamp, regime
+            ),
+            AlphaSource.LIQUIDITY: self.liquidity_module.calculate_batch_liquidity_signals(
+                prices_df, volumes_df, timestamp, regime
+            ),
+            AlphaSource.MOMENTUM: self.momentum_module.calculate_batch_momentum_signals(
+                prices_df, volumes_df, timestamp, regime
+            ),
+        }
+        return factor_signals
+
+    def _update_ic_scores(self, timestamp: pd.Timestamp):
+        """Update Information Coefficient (IC) scores for each factor."""
+        required_len = self.fwd_return_period + 1
+        if len(self.prices_history) < required_len:
+            return
+
+        signal_date_idx = -required_len
+        past_ts, past_prices = self.prices_history[signal_date_idx]
+        _, past_scores = self.factor_scores_history[signal_date_idx]
+        current_ts, current_prices = self.prices_history[-1]
+
+        if current_ts != timestamp:
+            self.logger.warning(
+                f"Timestamp mismatch in IC calc. History: {current_ts}, Current: {timestamp}"
             )
-            kept_symbols = {item[0] for item in sorted_longs[:max_positions]}
+            return
 
-            # Set action to 'hold' for signals that were trimmed
-            for symbol, signal in signals.items():
-                if signal.action == "long" and symbol not in kept_symbols:
-                    signal.action = "hold"
-                    self.logger.debug(f"Risk filter trimmed long signal for {symbol}.")
-        return signals
+        common_price_symbols = past_prices.keys() & current_prices.keys()
+        fwd_returns = {
+            sym: (current_prices[sym] / past_prices[sym]) - 1.0
+            for sym in common_price_symbols
+            if past_prices.get(sym, 0) > 0
+        }
 
-    def _update_signal_history_batch(self, signals: Dict[str, CompositeAlphaSignal]):
-        """Updates the internal signal history for later analysis."""
-        # This method can be expanded for diagnostics
-        pass
+        for source in AlphaSource:
+            if source not in past_scores or not past_scores[source]:
+                continue
+
+            common_symbols = past_scores[source].keys() & fwd_returns.keys()
+            if len(common_symbols) < 15:
+                continue
+
+            try:
+                scores = np.array([past_scores[source][sym] for sym in common_symbols])
+                returns = np.array([fwd_returns[sym] for sym in common_symbols])
+
+                if np.std(scores) < 1e-6 or np.std(returns) < 1e-6:
+                    continue
+
+                ic, _ = stats.spearmanr(scores, returns)
+                ic = 0.0 if np.isnan(ic) else ic
+
+                prev_ic = self.smoothed_ic[source]
+                self.smoothed_ic[source] = (
+                    self.ic_smoothing_alpha * ic
+                    + (1 - self.ic_smoothing_alpha) * prev_ic
+                )
+            except (KeyError, IndexError) as e:
+                self.logger.warning(f"Could not calculate IC for {source.name}: {e}")
+
+    def _update_history_for_ic(
+        self,
+        timestamp: pd.Timestamp,
+        factor_signals: Dict[AlphaSource, Dict],
+        market_data: pd.DataFrame,
+    ):
+        """Store current signals and prices for future IC calculation."""
+        if self.prices_history and self.prices_history[-1][0] == timestamp:
+            return
+
+        timestamp_mask = market_data.index.get_level_values("timestamp") == timestamp
+        if not timestamp_mask.any():
+            return
+
+        current_prices = (
+            market_data.loc[timestamp_mask, "close"].groupby("symbol").last().to_dict()
+        )
+        if not current_prices:
+            return
+
+        current_scores = {
+            source: {sym: sig.score for sym, sig in signals.items()}
+            for source, signals in factor_signals.items()
+            if signals
+        }
+
+        self.prices_history.append((timestamp, current_prices))
+        self.factor_scores_history.append((timestamp, current_scores))

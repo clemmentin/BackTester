@@ -1,5 +1,3 @@
-# data_pipeline/data_fetchers/macro_fetcher.py
-
 import logging
 import os
 from datetime import datetime, timedelta

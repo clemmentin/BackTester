@@ -9,9 +9,10 @@ __pycache__/
 # IDE files
 .idea/
 .vscode/
-
+.cache/
 .env
 *.log
+*.html
 test.py
 test1.py
 test2.py
@@ -20,4 +21,9 @@ test2.py
 alpha_strategy.py
 monitoring.py
 legacy/
-Logbook.txt
+*.csv
+LogBook.txt
+test3.py
+test4.py
+test5.py
+test6.py

@@ -1,5 +1,9 @@
-#!/usr/bin/env python3
-# main.py - Alpha Strategy Backtesting System
+# main.py
+# !/usr/bin/env python3
+"""
+Quantitative Strategy Backtesting System - Main Execution Engine
+This is the primary entry point for running a performance backtest.
+"""
 import argparse
 import cProfile
 import logging
@@ -7,279 +11,199 @@ import os
 import pstats
 import sys
 import time
-from datetime import datetime, timedelta
-from pstats import SortKey
-from typing import Any, Dict
+from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 
-# Add project path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-# Project imports
 import config
 import config.general_config as general_config
-from analysis.runner import generate_report
-from backtester.optimization import (run_single_simple_backtest,
-                                     run_walk_forward_optimization)
+from backtester.optimization import (
+    run_single_simple_backtest,
+    run_walk_forward_optimization,
+)
 from data_pipeline.unified_data_manager import UnifiedDataManager
 
 
 def setup_logging():
-    """Configure logging for the application"""
+    """Configure logging for the entire application."""
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     logging.basicConfig(
         level=logging.INFO,
         format=log_format,
         handlers=[
-            logging.FileHandler("backtest.log", mode="w"),
+            logging.FileHandler("main_execution.log", mode="w"),
             logging.StreamHandler(),
         ],
     )
-    logging.getLogger("matplotlib").setLevel(logging.WARNING)
-    logging.getLogger("yfinance").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    # Silence overly verbose third-party libraries
+    for logger_name in ["matplotlib", "yfinance", "urllib3", "fredapi"]:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
-def get_required_symbols() -> list:
-    """Get all required symbols for backtesting"""
-    base_etf_symbols = general_config.RISK_ON_SYMBOLS + general_config.RISK_OFF_SYMBOLS
-    individual_stocks = getattr(general_config, "INDIVIDUAL_STOCKS", [])
-    all_symbols = list(set(base_etf_symbols + individual_stocks))
+def print_configuration_summary():
+    """Prints a clear summary of the current backtest configuration."""
+    print("\n" + "=" * 80)
+    print(" " * 25 + "BACKTEST CONFIGURATION SUMMARY")
+    print("=" * 80)
+    run_mode = "Walk-Forward Optimization" if config.WFO_ENABLED else "Single Backtest"
+    print(f"RUN MODE        : {run_mode}")
+    print(f"STRATEGY        : {config.CURRENT_STRATEGY}")
+    print(f"INITIAL CAPITAL : ${config.INITIAL_CAPITAL:,.0f}")
+    print(
+        f"BACKTEST PERIOD : {config.BACKTEST_START_DATE} to {config.BACKTEST_END_DATE}"
+    )
 
-    print("Symbol breakdown:")
-    print(f"  Risk-on ETFs: {len(general_config.RISK_ON_SYMBOLS)}")
-    print(f"  Risk-off ETFs: {len(general_config.RISK_OFF_SYMBOLS)}")
-    if individual_stocks:
-        print(f"  Individual stocks: {len(individual_stocks)}")
-    print(f"  Total unique symbols: {len(all_symbols)}")
-    return all_symbols
+    if config.CURRENT_STRATEGY == "HYBRID_DUAL_ALPHA":
+        params = config.HYBRID_DUAL_PARAMS
+        engine_params = params.get("alpha_engine", {})
+        ic_enabled = engine_params.get("ic_enabled", True)
 
-
-def run_data_pipeline() -> pd.DataFrame:
-    """Run the unified data pipeline"""
-    print("\nRunning data pipeline...")
-    try:
-        backtest_start_dt = datetime.strptime(
-            general_config.BACKTEST_START_DATE, "%Y-%m-%d"
-        )
-
-        # Calculate data fetch start date using the warm-up period from general_config
-        data_fetch_start_dt = backtest_start_dt - timedelta(
-            days=general_config.WARMUP_PERIOD_DAYS * 1.5
-        )
-        data_fetch_start_str = data_fetch_start_dt.strftime("%Y-%m-%d")
-
-        print(f"Backtest will start on: {general_config.BACKTEST_START_DATE}")
+        print("\n--- Alpha Engine (3-Factor Model) ---")
+        print(f"  Price Weight            : {engine_params.get('price_weight', 0):.0%}")
         print(
-            f"Requesting data from: {data_fetch_start_str} to include a {general_config.WARMUP_PERIOD_DAYS}-day warm-up period."
+            f"  Reversal Weight         : {engine_params.get('reversal_weight', 0):.0%}"
         )
+        print(
+            f"  Momentum Weight         : {engine_params.get('momentum_weight', 0):.0%}"
+        )
+        print(f"  Dynamic IC Weighting    : {'Enabled' if ic_enabled else 'Disabled'}")
 
-        # MODIFIED: Instantiate and use UnifiedDataManager directly
+    print("\n--- Risk & Position Management ---")
+
+    pos_mgmt = config.TRADING_PARAMS.get("position_management", {})
+    min_pos = pos_mgmt.get("min_total_positions", "N/A")
+    max_pos = pos_mgmt.get("max_total_positions", "N/A")
+
+    exposure_mgmt = config.RISK_PARAMS.get("exposure_management", {})
+    min_exp = exposure_mgmt.get("min_exposure_pct", "N/A")
+    max_exp = exposure_mgmt.get("max_exposure_pct", "N/A")
+
+    print(f"  Position Count Range    : {min_pos} to {max_pos} positions (dynamic)")
+    if isinstance(min_exp, float) and isinstance(max_exp, float):
+        print(f"  Portfolio Exposure Range: {min_exp:.0%} to {max_exp:.0%} (dynamic)")
+    else:
+        print(f"  Portfolio Exposure Range: N/A")
+
+    print(
+        f"  Max Drawdown Threshold  : {config.RISK_PARAMS['drawdown_control']['max_drawdown_threshold']:.0%}"
+    )
+    print(
+        f"  Rebalance Frequency     : {config.TRADING_PARAMS['strategy_execution']['rebalance_frequency']}"
+    )
+    print("=" * 80)
+
+
+def run_data_pipeline(force_refresh: bool = False) -> Optional[pd.DataFrame]:
+    """Initializes the data manager and builds the complete feature set."""
+    print("\n[PHASE 1] Data Pipeline")
+    print("-" * 80)
+    try:
         manager = UnifiedDataManager()
-        all_data = manager.build_feature_set(
-            force_refresh=False,
-            start_date=data_fetch_start_str,  # Pass the calculated start date
-        )
+        all_data = manager.build_feature_set(force_refresh=force_refresh)
 
         if all_data is None or all_data.empty:
-            raise ValueError("Data pipeline returned an empty dataset")
+            raise ValueError("Data pipeline returned an empty or None dataset.")
 
         date_range = all_data.index.get_level_values("timestamp")
-        print(
-            f"Pipeline completed. {len(all_data)} total records loaded (including warm-up)."
-        )
-        print(
-            f"Full data range: {date_range.min().date()} to {date_range.max().date()}"
-        )
+        print("Data pipeline successful.")
+        print(f"  - Total records loaded: {len(all_data):,}")
+        print(f"  - Data range: {date_range.min().date()} to {date_range.max().date()}")
         return all_data
     except Exception as e:
-        logging.error(f"Data pipeline failed: {e}", exc_info=True)
+        logging.error(f"Data pipeline failed catastrophically: {e}", exc_info=True)
         return None
 
 
-def run_backtest(all_data: pd.DataFrame) -> Dict[str, Any]:
-    """Run backtest with WFO or simple mode, expecting a results dictionary."""
-    print(f"\nStarting backtest...")
-
+def run_full_backtest(all_data: pd.DataFrame):
+    """Orchestrates the backtest and subsequent performance analysis."""
+    print("\n[PHASE 2] Backtest Execution")
+    print("-" * 80)
     if config.WFO_ENABLED:
-        print("Walk-Forward Optimization is enabled.")
-        # We assume run_walk_forward_optimization is correctly passing the start_date internally
-        return run_walk_forward_optimization(
+        logging.info("WFO mode enabled. Starting Walk-Forward Optimization...")
+        backtest_results = run_walk_forward_optimization(
             all_data, start_date=general_config.BACKTEST_START_DATE
         )
     else:
-        print("Running single backtest (WFO disabled)")
-        return run_single_simple_backtest(
+        logging.info("Single backtest mode enabled.")
+        backtest_results = run_single_simple_backtest(
             all_data, start_date=general_config.BACKTEST_START_DATE
         )
 
+    if not backtest_results or backtest_results.get("holdings", pd.DataFrame()).empty:
+        logging.critical(
+            "CRITICAL: Backtest failed or produced no results. Aborting analysis."
+        )
+        return
 
-def generate_analysis(backtest_results: dict):
-    """Generate comprehensive analysis report from the backtest results."""
-    print("\nGenerating performance analysis...")
-    from analysis.runner import generate_report
-
-    try:
-        holdings_df = backtest_results.get("holdings", pd.DataFrame())
-        # The trades data is also available
-        closed_trades_df = backtest_results.get("closed_trades", pd.DataFrame())
-
-        if holdings_df.empty:
-            print("WARNING: No holdings data to analyze. Skipping report generation.")
-            return
-
-        generate_report(holdings_df, closed_trades_df, config.INITIAL_CAPITAL)
-
-        print("Analysis report generated successfully.")
-
-    except Exception as e:
-        print(f"Analysis generation failed: {e}")
-        logging.error(f"Analysis error: {e}", exc_info=True)
-
-
-def print_configuration():
-    """Prints a summary of the current backtest configuration."""
-    print("\n" + "=" * 60)
-    print("CURRENT BACKTEST CONFIGURATION")
-    print("=" * 60)
-    print(f"Strategy: {config.CURRENT_STRATEGY}")
-    print(f"Initial Capital: ${config.INITIAL_CAPITAL:,.0f}")
-    print(
-        f"Backtest Period: {config.BACKTEST_START_DATE} to {config.BACKTEST_END_DATE}"
+    print("\n[PHASE 3] Performance Analysis & Reporting")
+    print("-" * 80)
+    from analysis.runner import (
+        generate_report,
     )
 
-    alpha_params = config.ALPHA_UNIFIED_PARAMS
-    print("\n--- Key Alpha Parameters (strategy_config.py) ---")
-    print(
-        f"  Alpha Weights: Momentum={alpha_params['momentum_weight']:.0%}, Technical={alpha_params['technical_weight']:.0%}"
+    generate_report(
+        backtest_results["holdings"],
+        backtest_results["closed_trades"],
+        config.INITIAL_CAPITAL,
     )
-    print(
-        f"  Momentum Windows: {alpha_params['momentum_short']}-{alpha_params['momentum_medium']}-{alpha_params['momentum_long']}"
-    )
-
-    print("\n--- Key Risk & Execution Parameters (trading_parameters.py) ---")
-    print("  Portfolio Construction:")
-    print(
-        f"    - Max Positions: {config.TRADING_PARAMS['position_sizing']['max_positions']}"
-    )
-    print(
-        f"    - Sizing Method: {config.TRADING_PARAMS['position_sizing']['position_size_method']}"
-    )
-    print(
-        f"    - Rebalance Freq: {config.TRADING_PARAMS['strategy_execution']['rebalance_frequency']}"
-    )
-    print(f"  Risk Management:")
-    print(
-        f"    - Max Drawdown Threshold: {config.RISK_PARAMS['drawdown_control']['max_drawdown_threshold']:.0%}"
-    )
-    print(f"    - Stop Loss Enabled: {config.RISK_PARAMS['stop_loss']['enabled']}")
-    print("=" * 60)
 
 
 def main() -> int:
-    """Main execution function"""
-    start_time = datetime.now()
-    parser = argparse.ArgumentParser(description="Alpha Strategy Backtesting")
-    parser.add_argument("--profile", action="store_true", help="启用性能分析")
-    parser.add_argument("--time-phases", action="store_true", help="显示各阶段耗时")
+    """Main execution function to orchestrate the entire process."""
+    start_time_global = time.time()
+
+    parser = argparse.ArgumentParser(
+        description="Quantitative Strategy Backtesting System"
+    )
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Force a full refresh of all market data from APIs.",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Enable performance profiling of the code.",
+    )
     args = parser.parse_args()
 
-    start_time = datetime.now()
-    phase_timings = {}
-
-    print("=" * 60)
-    print("ALPHA UNIFIED STRATEGY BACKTESTING SYSTEM")
-    print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
-
     setup_logging()
-    print_configuration()
+    print_configuration_summary()
 
-    # 如果启用性能分析
-    if args.profile:
-        profiler = cProfile.Profile()
+    profiler = cProfile.Profile() if args.profile else None
+    if profiler:
         profiler.enable()
 
     try:
-        # Phase 1: Data Pipeline
-        phase_start = time.perf_counter()
-        print("\n[PHASE 1] Data Pipeline")
-        print("-" * 40)
-        all_data = run_data_pipeline()
-        phase_timings["data_pipeline"] = time.perf_counter() - phase_start
-
-        if all_data is None or all_data.empty:
-            print("CRITICAL ERROR: No valid market data was loaded. Exiting.")
+        all_data = run_data_pipeline(force_refresh=args.force_refresh)
+        if all_data is None:
             return 1
-
-        # Phase 2: Backtest Execution
-        phase_start = time.perf_counter()
-        print("\n[PHASE 2] Backtest Execution")
-        print("-" * 40)
-        backtest_results = run_backtest(all_data)
-        phase_timings["backtest"] = time.perf_counter() - phase_start
-
-        if (
-            not backtest_results
-            or backtest_results.get("holdings", pd.DataFrame()).empty
-        ):
-            print("CRITICAL ERROR: Backtest failed or produced no results. Exiting.")
-            return 1
-
-        # Phase 3: Performance Analysis
-        phase_start = time.perf_counter()
-        print("\n[PHASE 3] Performance Analysis")
-        print("-" * 40)
-        generate_analysis(backtest_results)
-        phase_timings["analysis"] = time.perf_counter() - phase_start
-
-        # 显示性能分析结果
-        if args.profile:
-            profiler.disable()
-            print("\n" + "=" * 60)
-            print("PERFORMANCE PROFILING RESULTS")
-            print("=" * 60)
-            stats = pstats.Stats(profiler)
-            stats.sort_stats(SortKey.CUMULATIVE)
-            stats.print_stats(30)
-
-            # 保存详细结果
-            stats.dump_stats(f"profile_{datetime.now():%Y%m%d_%H%M%S}.prof")
-            print(f"\n详细分析已保存，可使用 snakeviz 查看")
-
-        # 显示各阶段耗时
-        if args.time_phases or args.profile:
-            print("\n" + "=" * 60)
-            print("PHASE TIMING BREAKDOWN")
-            print("=" * 60)
-            total_time = sum(phase_timings.values())
-            for phase, duration in phase_timings.items():
-                percentage = (duration / total_time * 100) if total_time > 0 else 0
-                print(f"{phase:20}: {duration:8.2f}s ({percentage:5.1f}%)")
-            print(f"{'TOTAL':20}: {total_time:8.2f}s")
-
-        end_time = datetime.now()
-        print("\n" + "=" * 60)
-        print("EXECUTION COMPLETED SUCCESSFULLY")
-        print(f"Finished: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Total Duration: {end_time - start_time}")
-        print("=" * 60)
-        return 0
+        run_full_backtest(all_data)
 
     except KeyboardInterrupt:
-        print("\nExecution interrupted by user.")
+        print("\n\nExecution interrupted by user.")
         return 130
-    except Exception as e:
-        logging.error(
-            "Main execution failed with an unhandled exception.", exc_info=True
-        )
-        print(f"\nFATAL ERROR: An unhandled exception occurred: {e}")
+    except Exception:
+        logging.critical("A fatal error occurred during main execution.", exc_info=True)
         return 1
+    finally:
+        if profiler:
+            profiler.disable()
+            stats = pstats.Stats(profiler).sort_stats(pstats.SortKey.CUMULATIVE)
+            print("\n" + "=" * 80 + "\nPERFORMANCE PROFILE\n" + "=" * 80)
+            stats.print_stats(30)
+
+        total_duration = time.time() - start_time_global
+        print("\n" + "=" * 80 + "\nEXECUTION SUMMARY\n" + "=" * 80)
+        print(f"Total Run Time: {total_duration:.2f} seconds")
+        print(f"End Time: {datetime.now():%Y-%m-%d %H:%M:%S}")
+        print("=" * 80)
+
+    return 0
 
 
 if __name__ == "__main__":
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-    if os.getcwd() != project_root:
-        os.chdir(project_root)
     sys.exit(main())

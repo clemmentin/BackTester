@@ -1,446 +1,270 @@
-# strategies/risk/integrated_risk_manager.py
-
 import logging
+from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
-
+from typing import Dict, List, Optional
+from collections import deque
+from functools import partial
 import numpy as np
-import pandas as pd
-
+import config
+from config import get_param_with_override
 from strategy.alpha.market_detector import MarketRegime, MarketState
+from strategy.contracts import RiskBudget
 
 
-class RiskMode(Enum):
-    """Risk management modes"""
+class RiskLevel(Enum):
+    """Internal risk levels used to determine the final budget."""
 
     NORMAL = "normal"
     CAUTIOUS = "cautious"
+    RECOVERY = "recovery"
+    SIDEWAYS = "sideways"
     DEFENSIVE = "defensive"
-    RISK_OFF = "risk_off"
     EMERGENCY = "emergency"
-
-
-@dataclass
-class RiskAssessment:
-    """Risk assessment result"""
-
-    mode: RiskMode
-    position_limit: int
-    position_size_multiplier: float
-    allow_new_positions: bool
-    force_exit_symbols: List[str]
-    reduce_position_symbols: List[str]
-    risk_score: float
-    warnings: List[str]
-    timestamp: datetime
 
 
 class RiskManager:
     """
-    Strategy-integrated risk management module
-    Enhanced from backtester/risk_manager.py for internal strategy use
+    Acts as Layer 3: The Risk Budgeting Layer.
+
+    Its sole responsibility is to analyze the market and portfolio state to
+    produce a clear, actionable RiskBudget. It is completely independent of
+    any alpha signals or strategy-specific logic.
     """
 
-    def __init__(self, initial_capital: float, **kwargs):
+    def __init__(self, initial_capital: float, config_dict: Dict):
+        """
+        Constructor remains largely the same, loading risk parameters.
+        """
         self.logger = logging.getLogger(__name__)
         self.initial_capital = initial_capital
+        get_dd_param = partial(get_param_with_override, config_dict, "drawdown_control")
+        get_exposure_param = partial(
+            get_param_with_override, config_dict, "exposure_management"
+        )
+        get_pos_mgmt_param = partial(
+            get_param_with_override, config_dict, "position_management"
+        )
+        get_vol_param = partial(
+            get_param_with_override, config_dict, "portfolio_volatility_control"
+        )
+        get_scaling_param = partial(
+            get_param_with_override, config_dict, "continuous_risk_scaling"
+        )
+        get_sizing_param = partial(
+            get_param_with_override, config_dict, "position_sizing"
+        )
 
-        # Core risk parameters
-        self.max_drawdown_threshold = kwargs.get("max_drawdown_threshold", 0.20)
-        self.emergency_drawdown = kwargs.get("emergency_drawdown", 0.30)
-        self.drawdown_recovery_threshold = kwargs.get("recovery_threshold", 0.90)
-        self.risk_off_cooldown_days = kwargs.get("risk_off_cooldown", 5)
+        # --- Drawdown Control Parameters ---
+        self.max_drawdown = get_dd_param("max_drawdown_threshold", 0.25)
+        self.emergency_drawdown = get_dd_param("emergency_drawdown_threshold", 0.30)
+        self.recovery_threshold = get_dd_param("recovery_threshold", 0.90)
+        self.cooldown_days = get_dd_param("cooldown_days", 3)
+        self.drawdown_lookback_days = get_dd_param("drawdown_lookback_days", 252)
 
-        # Position limits
-        self.base_max_positions = kwargs.get("max_positions", 8)
-        self.min_positions = kwargs.get("min_positions", 2)
-        self.max_single_position = kwargs.get("max_single_position", 0.35)
-        self.max_sector_exposure = kwargs.get("max_sector_exposure", 0.40)
+        # --- Portfolio Volatility Control Parameters ---
+        self.volatility_control_enabled = get_vol_param("enabled", True)
+        self.volatility_target = get_vol_param("portfolio_volatility_target", 0.15)
+        self.volatility_lookback = get_vol_param("portfolio_volatility_lookback", 60)
+        self.volatility_max_scaling = get_vol_param(
+            "portfolio_volatility_max_scaling", 1.5
+        )
+        self.volatility_min_scaling = get_vol_param(
+            "portfolio_volatility_min_scaling", 0.5
+        )
 
-        # Volatility management
-        self.target_portfolio_volatility = kwargs.get("target_volatility", 0.15)
-        self.max_portfolio_volatility = kwargs.get("max_volatility", 0.25)
-        self.volatility_lookback = kwargs.get("volatility_lookback", 20)
+        # --- Continuous Risk Scaling Parameters ---
+        self.continuous_scaling_enabled = get_scaling_param("enabled", True)
+        self.drawdown_weight = get_scaling_param("drawdown_weight", 0.50)
+        self.market_regime_weight = get_scaling_param("market_regime_weight", 0.30)
+        self.portfolio_volatility_weight = get_scaling_param(
+            "portfolio_volatility_weight", 0.20
+        )
 
-        # Risk scoring thresholds
-        self.risk_score_thresholds = {
-            "low": 0.2,
-            "medium": 0.4,
-            "high": 0.6,
-            "extreme": 0.8,
-        }
+        # --- Position Sizing Limits ---
+        self.max_positions = get_sizing_param("max_positions", 15)
+        self.min_positions = get_sizing_param("min_positions", 3)
 
-        # State tracking
-        self.current_drawdown = 0.0
+        # --- State Initialization ---
         self.peak_value = initial_capital
-        self.current_mode = RiskMode.NORMAL
-        self.risk_off_entry_time = None
-        self.position_values = {}  # Track individual position values
-        self.portfolio_volatility_history = []
+        self.risk_budget_levels = config.get_trading_param(
+            "RISK_PARAMS", "risk_budget_levels", default={}
+        )
+        self.current_level = RiskLevel.NORMAL
+        self.current_drawdown = 0.0
+        self.in_recovery_mode = False
+        self.recovery_start_time = None
 
-        # Risk metrics history
-        self.risk_history = []
-        self.last_assessment = None
+        # --- History Tracking ---
+        max_lookback = max(self.volatility_lookback, self.drawdown_lookback_days) + 5
+        self.portfolio_value_history = deque(maxlen=max_lookback)
+        self.portfolio_value_history.append(initial_capital)
 
-        self.is_initialized = False
+        # --- Leverage Limits ---
+        limits_config = config.get_trading_param(
+            "RISK_PARAMS", "portfolio_limits", default={}
+        )
+        self.max_leverage = config_dict.get(
+            "max_leverage", limits_config.get("max_leverage", 1.0)
+        )
 
-    def assess_portfolio_risk(
+        self.min_exposure_pct = get_exposure_param("min_exposure_pct", 0.30)
+        self.max_exposure_pct = get_exposure_param("max_exposure_pct", 0.98)
+        self.risk_score_history = deque(maxlen=5)
+
+        self.min_positions = get_pos_mgmt_param("min_total_positions", 5)
+        self.max_positions = get_pos_mgmt_param("max_total_positions", 20)
+        self.logger.info(
+            f"RiskManager initialized: max_dd={self.max_drawdown:.1%}, vol_target={self.volatility_target:.1%}"
+            f"max_leverage={self.max_leverage:.2f}x, "
+            f"positions=[{self.min_positions}-{self.max_positions}]"
+        )
+
+    def determine_risk_budget(
         self,
         portfolio_value: float,
-        positions: Dict[str, float],
-        market_state: "MarketState",
         timestamp: datetime,
-    ) -> RiskAssessment:
-        """
-        Comprehensive portfolio risk assessment
+        market_state: MarketState,
+    ) -> RiskBudget:
 
-        Args:
-            portfolio_value: Current total portfolio value
-            positions: Dictionary of symbol -> position value
-            market_state: Current market state from MarketDetector
-            timestamp: Current timestamp
+        self._update_drawdown(portfolio_value, timestamp)
+        self.portfolio_value_history.append(portfolio_value)
 
-        Returns:
-            RiskAssessment with recommendations
-        """
-        if not self.is_initialized:
-            self.is_initialized = True
-            self.peak_value = portfolio_value
-            self.current_mode = RiskMode.NORMAL
+        # Step 1: Calculate a continuous risk score from 0 (safest) to 1 (riskiest)
+        raw_risk_score = self._calculate_continuous_risk_score(market_state)
 
-        self.update_drawdown_status(portfolio_value, timestamp)
+        self.risk_score_history.append(raw_risk_score)
+        smoothed_risk_score = np.mean(self.risk_score_history)
 
-        # Calculate risk components
-        drawdown_risk = self._assess_drawdown_risk()
-        volatility_risk = self._assess_volatility_risk(positions)
-        concentration_risk = self._assess_concentration_risk(positions, portfolio_value)
-        market_risk = self._assess_market_risk(market_state)
+        risk_score = smoothed_risk_score
 
-        # Calculate composite risk score
-        risk_score = self._calculate_composite_risk_score(
-            drawdown_risk, volatility_risk, concentration_risk, market_risk
+        # Step 2: Determine dynamic leverage based on the risk score
+        target_exposure_pct = self.min_exposure_pct + risk_score * (
+            self.max_exposure_pct - self.min_exposure_pct
         )
 
-        # Determine risk mode
-        risk_mode = self._determine_risk_mode(risk_score, market_state)
+        # Step 3: Map the risk score to a target *gross* exposure
+        target_gross_exposure_value = portfolio_value * target_exposure_pct
 
-        # Generate risk-based recommendations
-        recommendations = self._generate_recommendations(
-            risk_mode, risk_score, positions, portfolio_value, market_state
+        # Step 4: Map the risk score to the number of positions
+        min_pos = self.min_positions
+        max_pos = self.max_positions
+        target_positions = int(
+            self.min_positions + risk_score * (self.max_positions - self.min_positions)
+        )
+        target_positions = np.clip(
+            target_positions, self.min_positions, self.max_positions
         )
 
-        # Create assessment
-        assessment = RiskAssessment(
-            mode=risk_mode,
-            position_limit=recommendations["position_limit"],
-            position_size_multiplier=recommendations["size_multiplier"],
-            allow_new_positions=recommendations["allow_new"],
-            force_exit_symbols=recommendations["force_exits"],
-            reduce_position_symbols=recommendations["reduce_positions"],
-            risk_score=risk_score,
-            warnings=recommendations["warnings"],
-            timestamp=timestamp,
+        # Step 5: Update the RiskBudget object
+        final_budget = RiskBudget(
+            target_portfolio_exposure=target_gross_exposure_value,
+            max_position_count=target_positions,
         )
 
-        # Update history
-        self.last_assessment = assessment
-        self._update_risk_history(assessment)
+        self.logger.info(
+            f"Risk Budget: Score={risk_score:.2f}, Target Exposure={target_exposure_pct:.1%}, "
+            f"Target Value=${final_budget.target_portfolio_exposure:,.0f}, "
+            f"TargetPos={final_budget.max_position_count}"
+        )
 
-        return assessment
+        return final_budget
 
-    def update_drawdown_status(self, current_value: float, timestamp: datetime):
-        """Update drawdown tracking"""
-        if self.peak_value == 0 or self.peak_value < self.initial_capital * 0.5:
-            self.peak_value = max(current_value, self.initial_capital)
-        # Check cooldown period
-        if self.risk_off_entry_time:
-            days_since = (timestamp - self.risk_off_entry_time).days
-            if days_since > self.risk_off_cooldown_days:
-                self.logger.info("Risk-off cooldown period ended")
-                self.risk_off_entry_time = None
+    def _update_drawdown(self, current_value: float, timestamp: datetime):
+        """Update drawdown calculation."""
+        # Get the history of portfolio values within the lookback window
+        history_array = np.array(self.portfolio_value_history)
 
-        # Update peak
-        if current_value > self.peak_value:
-            self.peak_value = current_value
-            if self.current_mode == RiskMode.RISK_OFF:
-                self.logger.info("New peak reached, exiting risk-off mode")
-                self.current_mode = RiskMode.NORMAL
-                self.risk_off_entry_time = None
+        # Find the peak value within that recent window
+        rolling_peak = np.max(history_array)
 
-        # Calculate drawdown
-        if self.peak_value > 0:
-            self.current_drawdown = (self.peak_value - current_value) / self.peak_value
+        if rolling_peak > 0:
+            self.current_drawdown = (rolling_peak - current_value) / rolling_peak
         else:
             self.current_drawdown = 0.0
 
-    def _assess_drawdown_risk(self) -> float:
-        """Assess risk from drawdown perspective"""
-        if self.current_drawdown >= self.emergency_drawdown:
-            return 1.0  # Maximum risk
-        elif self.current_drawdown >= self.max_drawdown_threshold:
-            return 0.8
-        elif self.current_drawdown >= self.max_drawdown_threshold * 0.75:
-            return 0.6
-        elif self.current_drawdown >= self.max_drawdown_threshold * 0.5:
-            return 0.4
-        else:
-            # Scale linearly for smaller drawdowns
-            return (self.current_drawdown / self.max_drawdown_threshold) * 0.4
+    def _calculate_continuous_risk_score(self, market_state: MarketState) -> float:
+        """
+        Calculates a single risk score from 0 (max defense) to 1 (max offense).
+        This score combines drawdown, market regime, and portfolio volatility.
+        """
+        # 1. Drawdown Component
+        drawdown_score = 1.0 - (self.current_drawdown / self.max_drawdown)
+        drawdown_score = np.clip(drawdown_score, 0, 1)
 
-    def _assess_volatility_risk(self, positions: Dict[str, float]) -> float:
-        """Assess portfolio volatility risk"""
-        if not positions:
-            return 0.0
-
-        # This would need actual price history in production
-        # For now, use a simplified calculation
-        position_count = len(positions)
-        concentration = (
-            max(positions.values()) / sum(positions.values()) if positions else 0
-        )
-
-        # Higher concentration and fewer positions = higher volatility risk
-        vol_risk = (
-            concentration * 0.5
-            + (1 - min(position_count / self.base_max_positions, 1)) * 0.5
-        )
-
-        return vol_risk
-
-    def _assess_concentration_risk(
-        self, positions: Dict[str, float], portfolio_value: float
-    ) -> float:
-        """Assess position concentration risk"""
-        if not positions or portfolio_value <= 0:
-            return 0.0
-
-        risks = []
-
-        # Check individual position concentration
-        for symbol, value in positions.items():
-            position_weight = value / portfolio_value
-            if position_weight > self.max_single_position:
-                risks.append(1.0)
-            elif position_weight > self.max_single_position * 0.8:
-                risks.append(0.7)
-            elif position_weight > self.max_single_position * 0.6:
-                risks.append(0.4)
-
-        # Check overall concentration (HHI)
-        weights = [v / portfolio_value for v in positions.values()]
-        hhi = sum(w**2 for w in weights)
-
-        # HHI ranges from 1/n (equal weight) to 1 (single position)
-        min_hhi = 1 / max(len(positions), 1)
-        normalized_hhi = (hhi - min_hhi) / (1 - min_hhi) if min_hhi < 1 else 0
-        risks.append(normalized_hhi)
-
-        return np.mean(risks) if risks else 0.0
-
-    def _assess_market_risk(self, market_state: "MarketState") -> float:
-        """Assess market environment risk"""
-        # Map market regimes to risk levels
-        regime_risk = {
-            "crisis": 1.0,
-            "bear": 0.7,
-            "volatile": 0.6,
-            "recovery": 0.4,
-            "normal": 0.3,
-            "bull": 0.2,
-            "strong_bull": 0.1,
+        # 2. Market Regime Component
+        regime_scores = {
+            MarketRegime.STRONG_BULL: 1.0,
+            MarketRegime.BULL: 0.9,
+            MarketRegime.NORMAL: 0.7,
+            MarketRegime.RECOVERY: 0.6,
+            MarketRegime.VOLATILE: 0.4,
+            MarketRegime.BEAR: 0.2,
+            MarketRegime.CRISIS: 0.0,
         }
+        market_score = regime_scores.get(market_state.regime, 0.5)
 
-        base_risk = regime_risk.get(market_state.regime.value, 0.5)
+        # 3. Portfolio Volatility Component
+        # Use the inverse of the scaler we developed in Improvement 1
+        volatility_scaler = self._calculate_volatility_scaler()
+        # We can normalize it to a 0-1 range.
+        volatility_score = (volatility_scaler - self.volatility_min_scaling) / (
+            self.volatility_max_scaling - self.volatility_min_scaling
+        )
+        volatility_score = np.clip(volatility_score, 0, 1)
 
-        # Adjust for market risk level
-        risk_adjustment = {"extreme": 1.2, "high": 1.1, "medium": 1.0, "low": 0.9}
-
-        adjusted_risk = base_risk * risk_adjustment.get(market_state.risk_level, 1.0)
-
-        return min(adjusted_risk, 1.0)
-
-    def _calculate_composite_risk_score(
-        self, drawdown: float, volatility: float, concentration: float, market: float
-    ) -> float:
-        """Calculate weighted composite risk score"""
-        weights = {
-            "drawdown": 0.35,
-            "volatility": 0.20,
-            "concentration": 0.20,
-            "market": 0.25,
-        }
-
-        composite = (
-            drawdown * weights["drawdown"]
-            + volatility * weights["volatility"]
-            + concentration * weights["concentration"]
-            + market * weights["market"]
+        # Combine with weights
+        final_score = (
+            (drawdown_score * 0.35) + (market_score * 0.45) + (volatility_score * 0.20)
         )
 
-        return min(composite, 1.0)
+        return np.clip(final_score, 0, 1)
 
-    def _determine_risk_mode(
-        self, risk_score: float, market_state: "MarketState"
-    ) -> RiskMode:
-        """Determine appropriate risk management mode"""
-        # Emergency conditions
-        if self.risk_off_entry_time:
-            # During cooldown, be more conservative
-            min_mode = RiskMode.CAUTIOUS
-        else:
-            min_mode = RiskMode.NORMAL
-
-            # Determine mode based on conditions
-        determined_mode = RiskMode.NORMAL  # Default
-
-        # Emergency conditions
-        if self.current_drawdown >= self.emergency_drawdown:
-            determined_mode = RiskMode.EMERGENCY
-            # Record entry time for risk-off
-            if not self.risk_off_entry_time:
-                self.risk_off_entry_time = datetime.now()
-
-        # Risk-off conditions
-        elif (
-            self.current_drawdown >= self.max_drawdown_threshold
-            or risk_score > self.risk_score_thresholds["extreme"]
-        ):
-            determined_mode = RiskMode.RISK_OFF
-            if not self.risk_off_entry_time:
-                self.risk_off_entry_time = datetime.now()
-
-        elif risk_score > self.risk_score_thresholds[
-            "high"
-        ] or market_state.regime.value in ["crisis", "bear"]:
-            determined_mode = RiskMode.DEFENSIVE
-
-        # Cautious conditions
-        elif (
-            risk_score > self.risk_score_thresholds["medium"]
-            or market_state.regime.value == "volatile"
-        ):
-            determined_mode = RiskMode.CAUTIOUS
-
-        # Apply minimum mode from cooldown (don't allow going below CAUTIOUS during cooldown)
-        if min_mode == RiskMode.CAUTIOUS and determined_mode == RiskMode.NORMAL:
-            return RiskMode.CAUTIOUS
-
-        return determined_mode
-
-    def _generate_recommendations(
-        self,
-        mode: RiskMode,
-        risk_score: float,
-        positions: Dict[str, float],
-        portfolio_value: float,
-        market_state: "MarketState",
-    ) -> Dict:
-        """Generate specific risk management recommendations"""
-        recommendations = {
-            "position_limit": self.base_max_positions,
-            "size_multiplier": 1.0,
-            "allow_new": True,
-            "force_exits": [],
-            "reduce_positions": [],
-            "warnings": [],
-        }
-
-        # Mode-specific adjustments
-        if mode == RiskMode.EMERGENCY:
-            recommendations["position_limit"] = 0.1
-            recommendations["size_multiplier"] = 0.1
-            recommendations["allow_new"] = False
-            recommendations["force_exits"] = list(positions.keys())
-            recommendations["warnings"].append(
-                "EMERGENCY: Exit all positions immediately"
-            )
-
-        elif mode == RiskMode.RISK_OFF:
-            recommendations["position_limit"] = self.min_positions
-            recommendations["size_multiplier"] = 0.3
-            recommendations["allow_new"] = False
-            # Exit weakest positions
-            if positions:
-                sorted_positions = sorted(positions.items(), key=lambda x: x[1])
-                exit_count = max(len(positions) - self.min_positions, 0)
-                recommendations["force_exits"] = [
-                    s for s, _ in sorted_positions[:exit_count]
-                ]
-            recommendations["warnings"].append(
-                f"RISK-OFF: Drawdown {self.current_drawdown:.1%}"
-            )
-
-        elif mode == RiskMode.DEFENSIVE:
-            recommendations["position_limit"] = max(self.min_positions + 1, 3)
-            recommendations["size_multiplier"] = 0.6
-            recommendations["allow_new"] = risk_score < 0.7
-            # Reduce large positions
-            for symbol, value in positions.items():
-                if value / portfolio_value > self.max_single_position * 0.8:
-                    recommendations["reduce_positions"].append(symbol)
-            recommendations["warnings"].append("DEFENSIVE: High risk environment")
-
-        elif mode == RiskMode.CAUTIOUS:
-            recommendations["position_limit"] = self.base_max_positions - 2
-            recommendations["size_multiplier"] = 0.8
-            recommendations["allow_new"] = True
-            recommendations["warnings"].append("CAUTIOUS: Elevated risk levels")
-
-        # Check position concentration regardless of mode
-        for symbol, value in positions.items():
-            weight = value / portfolio_value if portfolio_value > 0 else 0
-            if weight > self.max_single_position:
-                if symbol not in recommendations["reduce_positions"]:
-                    recommendations["reduce_positions"].append(symbol)
-                recommendations["warnings"].append(
-                    f"{symbol} exceeds max position size ({weight:.1%})"
-                )
-
-        return recommendations
-
-    def _update_risk_history(self, assessment: RiskAssessment):
-        """Update risk assessment history"""
-        self.risk_history.append(
-            {
-                "timestamp": assessment.timestamp,
-                "mode": assessment.mode.value,
-                "risk_score": assessment.risk_score,
-                "drawdown": self.current_drawdown,
-                "position_limit": assessment.position_limit,
-            }
+    def _check_recovery_complete(
+        self, portfolio_value: float, timestamp: datetime
+    ) -> bool:
+        """Check if recovery conditions are met."""
+        # Condition 1: Drawdown has recovered significantly
+        recovered_drawdown = self.current_drawdown < self.max_drawdown * (
+            1 - self.recovery_threshold
         )
 
-        # Keep only recent history
-        if len(self.risk_history) > 100:
-            self.risk_history = self.risk_history[-50:]
+        # Condition 2: Cooldown period has passed
+        cooldown_passed = False
+        if self.recovery_start_time:
+            days_elapsed = (timestamp - self.recovery_start_time).days
+            cooldown_passed = days_elapsed >= self.cooldown_days
 
-    def get_risk_metrics(self) -> Dict:
-        """Get current risk metrics for monitoring"""
-        return {
-            "current_mode": self.current_mode.value,
-            "current_drawdown": self.current_drawdown,
-            "peak_value": self.peak_value,
-            "risk_score": (
-                self.last_assessment.risk_score if self.last_assessment else 0
-            ),
-            "position_limit": (
-                self.last_assessment.position_limit
-                if self.last_assessment
-                else self.base_max_positions
-            ),
-            "allow_new_positions": (
-                self.last_assessment.allow_new_positions
-                if self.last_assessment
-                else True
-            ),
-            "warnings": self.last_assessment.warnings if self.last_assessment else [],
-        }
+        return recovered_drawdown and cooldown_passed
 
-    def should_emergency_exit(self) -> bool:
-        """Check if emergency exit conditions are met"""
-        return (
-            self.current_mode == RiskMode.EMERGENCY
-            or self.current_drawdown >= self.emergency_drawdown
+    def _calculate_volatility_scaler(self) -> float:
+        # Check if we have enough historical data to calculate volatility
+        if len(self.portfolio_value_history) < self.volatility_lookback:
+            return 1.0  # Not enough data, do not scale
+
+        # Calculate daily returns from the stored portfolio values
+        values = np.array(self.portfolio_value_history)
+        returns = (values[1:] - values[:-1]) / values[:-1]
+
+        # Calculate annualized volatility over the lookback period
+        realized_volatility = np.std(returns) * np.sqrt(252)
+
+        # If volatility is zero (e.g., all cash), avoid division by zero
+        if realized_volatility < 1e-6:
+            return self.volatility_max_scaling  # If no risk, we can take max risk
+
+        # The core scaling logic: (Target Vol / Realized Vol)
+        scaler = self.volatility_target / realized_volatility
+
+        # Clip the scaler to prevent extreme adjustments
+        scaler = np.clip(
+            scaler, self.volatility_min_scaling, self.volatility_max_scaling
         )
+
+        self.logger.debug(
+            f"Volatility Scaler: Realized Vol={realized_volatility:.2%}, "
+            f"Target Vol={self.volatility_target:.2%}, Scaler={scaler:.2f}"
+        )
+
+        return scaler

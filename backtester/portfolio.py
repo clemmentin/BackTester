@@ -1,28 +1,13 @@
-# backtester/portfolio.py
-# Clean portfolio implementation - pure execution layer with no risk management
-
 import logging
 from datetime import datetime
-
+from typing import List, Dict
 import numpy as np
 
 import config.trading_parameters as tp
-from backtester.events import OrderEvent
+from backtester.events import OrderEvent, SignalEvent
 
 
 class Portfolio:
-    """
-    Portfolio handles execution and bookkeeping only.
-    No risk decisions - those belong in the strategy layer.
-
-    Responsibilities:
-    - Execute buy/sell orders
-    - Track positions and holdings
-    - Calculate position sizes based on configuration
-    - Record trade statistics
-    - Handle transaction costs
-    """
-
     def __init__(
         self, events_queue, symbol_list, data_handler, initial_capital=100000.0
     ):
@@ -32,13 +17,14 @@ class Portfolio:
         self.data_handler = data_handler
         self.initial_capital = initial_capital
 
+        self.logger = logging.getLogger(self.__class__.__name__)
         # === Position Sizing Configuration ===
-        self.target_utilization = tp.TRADING_PARAMS["position_sizing"][
-            "target_utilization"
-        ]
-        self.max_positions = tp.TRADING_PARAMS["position_sizing"]["max_positions"]
-        self.min_positions = tp.TRADING_PARAMS["position_sizing"]["min_positions"]
-        self.position_buffer = tp.TRADING_PARAMS["position_sizing"]["position_buffer"]
+        sizing_params = tp.TRADING_PARAMS.get("position_sizing", {})
+        self.target_utilization = sizing_params.get("target_utilization", 0.98)
+        self.position_buffer = sizing_params.get("position_buffer", 0.02)
+        pos_mgmt_params = tp.TRADING_PARAMS.get("position_management", {})
+        self.max_positions = pos_mgmt_params.get("max_total_positions", 20)
+        self.min_positions = pos_mgmt_params.get("min_total_positions", 5)
 
         # === Transaction Costs ===
         self.commission_rate = tp.TRADING_PARAMS["transaction_costs"]["commission_rate"]
@@ -93,11 +79,13 @@ class Portfolio:
         self.peak_value = initial_capital
         self.current_drawdown = 0.0
 
-        logging.info(f"Portfolio initialized:")
-        logging.info(f"  Initial capital: ${initial_capital:,.0f}")
-        logging.info(f"  Target utilization: {self.target_utilization:.1%}")
-        logging.info(f"  Position limits: {self.min_positions}-{self.max_positions}")
-        logging.info(f"  Max single position: {self.max_single_position:.1%}")
+        self.logger.info(f"Portfolio initialized:")
+        self.logger.info(f"  Initial capital: ${initial_capital:,.0f}")
+        self.logger.info(f"  Target utilization: {self.target_utilization:.1%}")
+        self.logger.info(
+            f"  Position limits: {self.min_positions}-{self.max_positions}"
+        )
+        self.logger.info(f"  Max single position: {self.max_single_position:.1%}")
 
     def update_timeindex(self, event):
         """
@@ -165,93 +153,113 @@ class Portfolio:
     def on_signal(self, event):
         if event.type != "Signal":
             return
-
-        if event.signal_type == "Long" and event.score > 1.0:
-            logging.debug(
-                f"Received legacy score format {event.score}, converting to weight."
-            )
-            event.score = event.score / 10.0
-
         if event.signal_type == "Long":
-            self._process_buy_signal(event)
+            self._adjust_position_to_target_value(event)
+
         elif event.signal_type == "Exit":
             self._process_sell_signal(event)
         elif event.signal_type == "Reduce":
-            self._process_reduce_signal(event)
+            self.logger.warning(
+                f"Received deprecated 'Reduce' signal for {event.symbol}. "
+                f"This should be handled by a 'Long' signal with a new target value."
+            )
         elif event.signal_type == "Short":
             logging.info(
                 f"Ignoring SHORT signal for {event.symbol} (shorting not supported)"
             )
 
-    def _process_buy_signal(self, signal):
+    def _adjust_position_to_target_value(self, signal: SignalEvent):
+        """
+        NEW CORE METHOD: Adjusts a position to a specific target dollar value.
+        This handles initial buys, increasing a position, and reducing a position.
+        """
         symbol = signal.symbol
-        target_weight = signal.score
+        target_value = signal.score  # The 'score' is now the target dollar value
 
-        # --- Validate target weight ---
-        if (
-            not 0 < target_weight <= (self.max_single_position + 0.001)
-        ):  # Add buffer for float precision
-            logging.warning(
-                f"Signal for {symbol} has invalid target weight {target_weight:.2%}. "
-                f"Must be between 0 and {self.max_single_position:.1%}. Ignoring."
-            )
-            return
-
-        # --- Get current market price ---
+        # --- 1. Get current market price ---
         latest_bar = self.data_handler.get_latest_bars(symbol)
         if not latest_bar or not latest_bar[0] or latest_bar[0]["close"] <= 0:
-            logging.warning(
-                f"Could not get a valid current price for {symbol}. Ignoring buy signal."
+            self.logger.warning(
+                f"Could not get a valid current price for {symbol}. Ignoring adjustment signal."
             )
             return
         current_price = latest_bar[0]["close"]
 
-        # --- Core Sizing Logic ---
-        total_equity = self.current_holdings["total"]
-        target_value = total_equity * target_weight
+        # --- 2. Calculate required shares for target value ---
+        target_shares = int(target_value / current_price)
 
+        # --- 3. Get current holdings ---
         current_shares = self.current_positions.get(symbol, 0)
-        current_value = current_shares * current_price
 
-        value_to_add = target_value - current_value
+        # --- 4. Determine the trade quantity and direction ---
+        quantity_to_trade = target_shares - current_shares
 
-        # If we don't need to add more, exit. Reductions are handled by 'Reduce' or 'Exit' signals.
-        if value_to_add <= 0:
-            return
+        # --- 5. Generate Order Event ---
+        if quantity_to_trade > 0:
+            # This is a BUY or INCREASE order
 
-        quantity_to_buy = int(value_to_add / current_price)
+            # Cash Constraint Check
+            required_cash = quantity_to_trade * current_price
+            # Use a small buffer to avoid running out of cash for commissions
+            available_cash = self.current_holdings["cash"] * (1 - self.position_buffer)
 
-        if quantity_to_buy <= 0:
-            return
+            if required_cash > available_cash:
+                adjusted_quantity = int(available_cash / current_price)
+                self.logger.warning(
+                    f"Cash constraint for {symbol}. Reducing buy from {quantity_to_trade} to {adjusted_quantity} shares."
+                )
+                quantity_to_trade = adjusted_quantity
 
-        # --- Cash Constraint Check ---
-        required_cash = quantity_to_buy * current_price
-        available_cash = self.current_holdings["cash"] * (1 - self.position_buffer)
+            if quantity_to_trade <= 0:
+                self.logger.info(
+                    f"Not enough cash to place any buy order for {symbol}."
+                )
+                return
 
-        if required_cash > available_cash:
-            new_quantity = int(available_cash / current_price)
-            logging.warning(
-                f"Cash constraint for {symbol}. Reducing order from {quantity_to_buy} to {new_quantity} shares."
+            order = OrderEvent(
+                timestamp=signal.timestamp,
+                symbol=symbol,
+                order_type="Mkt",
+                quantity=quantity_to_trade,
+                direction="Buy",
             )
-            quantity_to_buy = new_quantity
+            self.events.put(order)
 
-        if quantity_to_buy <= 0:
-            logging.info(f"Not enough cash to place any order for {symbol}.")
-            return
+            action_log = "NEW BUY" if current_shares == 0 else "INCREASE"
+            self.logger.info(
+                f"PORTFOLIO: {action_log} order for {quantity_to_trade} {symbol} "
+                f"to reach target value of ${target_value:,.0f}"
+            )
 
-        order = OrderEvent(
-            timestamp=signal.timestamp,
-            symbol=symbol,
-            order_type="Mkt",
-            quantity=quantity_to_buy,
-            direction="Buy",
-        )
-        self.events.put(order)
+        elif quantity_to_trade < 0:
+            # This is a SELL or REDUCE order
 
-        action_log = "ADJUST" if current_shares > 0 else "NEW"
-        logging.info(
-            f"PORTFOLIO: {action_log} BUY order for {quantity_to_buy} {symbol} to reach target weight of {target_weight:.2%}"
-        )
+            quantity_to_sell = abs(quantity_to_trade)
+
+            # Sanity check: ensure we don't sell more than we own
+            if quantity_to_sell > current_shares:
+                self.logger.warning(
+                    f"Attempted to sell {quantity_to_sell} shares of {symbol}, but only hold {current_shares}. "
+                    f"Adjusting to sell all."
+                )
+                quantity_to_sell = current_shares
+
+            if quantity_to_sell <= 0:
+                return
+
+            order = OrderEvent(
+                timestamp=signal.timestamp,
+                symbol=symbol,
+                order_type="Mkt",
+                quantity=quantity_to_sell,
+                direction="Sell",
+            )
+            self.events.put(order)
+
+            self.logger.info(
+                f"PORTFOLIO: REDUCE order, selling {quantity_to_sell} {symbol} "
+                f"to reach target value of ${target_value:,.0f}"
+            )
 
     def _process_sell_signal(self, signal):
         """Process sell signal - exit entire position"""
@@ -271,32 +279,6 @@ class Portfolio:
         )
         self.events.put(order)
         logging.info(f"SELL ORDER: {quantity} shares of {symbol}")
-
-    def _process_reduce_signal(self, signal):
-        """Process partial position reduction"""
-        symbol = signal.symbol
-        current_quantity = self.current_positions.get(symbol, 0)
-
-        if current_quantity <= 0:
-            logging.debug(f"No position in {symbol} to reduce")
-            return
-
-        # Calculate shares to sell based on reduction ratio
-        reduction_ratio = signal.score if hasattr(signal, "score") else 0.5
-        shares_to_sell = int(current_quantity * reduction_ratio)
-
-        if shares_to_sell > 0:
-            order = OrderEvent(
-                timestamp=signal.timestamp,
-                symbol=symbol,
-                order_type="Mkt",
-                quantity=shares_to_sell,
-                direction="Sell",
-            )
-            self.events.put(order)
-            logging.info(
-                f"REDUCE ORDER: Selling {shares_to_sell}/{current_quantity} shares of {symbol}"
-            )
 
     def on_fill(self, event):
         """Process fill events - update positions and cash"""
@@ -373,37 +355,38 @@ class Portfolio:
         quantity = event.quantity
         fill_cost = event.fill_cost
         commission = event.commission
-
-        # Calculate price per share
         price_per_share = fill_cost / quantity if quantity > 0 else 0
 
-        # Update positions
         self.current_positions[symbol] = max(
             0, self.current_positions.get(symbol, 0) - quantity
         )
 
-        # Update cash
         proceeds = fill_cost - commission
         self.current_holdings["cash"] += proceeds
 
-        # Calculate PnL if we have entry data
         pnl = 0.0
+        entry_date = None  # ADDED
+        entry_price = 0.0  # ADDED
+        holding_days = 0  # ADDED
+
         if symbol in self.position_entries:
-            entry_price = self.position_entries[symbol]["price"]
+            entry_info = self.position_entries[symbol]
+            entry_price = entry_info["price"]
+            entry_date = entry_info.get("entry_time")  # ADDED
             pnl = (price_per_share - entry_price) * quantity - commission
 
-            # Update trade statistics
+            # Calculate holding period - ADDED
+            if entry_date:
+                holding_days = (event.timestamp - entry_date).days
+
             self._update_trade_stats(pnl)
 
-            # Clear or update entry tracking
             if self.current_positions[symbol] == 0:
-                # Position fully closed
                 del self.position_entries[symbol]
             else:
-                # Partial sale
                 self.position_entries[symbol]["quantity"] -= quantity
 
-        # Record trade
+        # Record trade with MORE details - CRITICAL FIX
         self.all_trades.append(
             {
                 "timestamp": event.timestamp,
@@ -414,6 +397,16 @@ class Portfolio:
                 "commission": commission,
                 "proceeds": proceeds,
                 "pnl": pnl,
+                "entry_date": entry_date,  # ADDED
+                "exit_date": event.timestamp,  # ADDED
+                "entry_price": entry_price,  # ADDED
+                "exit_price": price_per_share,  # ADDED
+                "holding_days": holding_days,  # ADDED
+                "return_pct": (
+                    (pnl / (entry_price * quantity) * 100)
+                    if entry_price > 0 and quantity > 0
+                    else 0
+                ),  # ADDED
             }
         )
 
@@ -513,3 +506,11 @@ class Portfolio:
                 else 0
             ),
         }
+
+    def get_current_position_values(self) -> Dict[str, float]:
+        """Returns a dictionary of current position values."""
+        values = {}
+        for symbol, quantity in self.current_positions.items():
+            if quantity > 0:
+                values[symbol] = self.current_holdings.get(symbol, 0.0)
+        return values

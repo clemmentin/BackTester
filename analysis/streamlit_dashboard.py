@@ -11,22 +11,16 @@ from plotly.subplots import make_subplots
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import config
+
 # --- Local Imports ---
-from analysis.performance import (calculate_advanced_metrics,
-                                  calculate_trade_stats_by_symbol,
-                                  generate_monthly_returns_table)
+from analysis.performance import (
+    calculate_advanced_metrics,
+    calculate_trade_stats_by_symbol,
+    generate_monthly_returns_table,
+)
 
 
 def load_backtest_results():
-    """
-    Loads backtest results data.
-
-    IMPORTANT: This is a placeholder function. You must connect this to your actual
-    data source (e.g., reading from a CSV, Parquet file, or database) where your
-    backtest engine saves its results.
-    """
-    # This should load data from your backtest result files.
-    # For now, it returns an example data structure.
     return {
         "equity_curve": pd.DataFrame(),  # Should have columns: 'total', 'returns'
         "closed_trades": pd.DataFrame(),  # Should have columns: 'symbol', 'pnl'
@@ -87,6 +81,8 @@ def main():
     # --- Key Performance Indicators ---
     st.header("Key Performance Indicators")
     col1, col2, col3, col4, col5 = st.columns(5)
+
+    initial_capital = config.INITIAL_CAPITAL
 
     current_value = (
         equity_curve["total"].iloc[-1]
@@ -177,7 +173,7 @@ def main():
         st.subheader("Detailed Performance Metrics")
         if not equity_curve.empty:
             detailed_metrics = calculate_advanced_metrics(
-                equity_curve, trade_stats=trade_stats
+                equity_curve, initial_capital=initial_capital
             )
             metrics_df = pd.DataFrame(
                 [{"Metric": k, "Value": v} for k, v in detailed_metrics.items()]
@@ -256,7 +252,7 @@ def main():
         # Correctly reference the position sizing method from TRADING_PARAMS
         sizing_options = ["signal_weighted", "equal_weight", "risk_parity"]
         current_sizing_method = config.TRADING_PARAMS["position_sizing"][
-            "position_size_method"
+            "weighting_scheme"
         ]
 
         # Ensure current method is in options list to prevent errors

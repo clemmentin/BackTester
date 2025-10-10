@@ -8,10 +8,14 @@ import yfinance as yf
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from .performance import (analyze_market_phases, calculate_advanced_metrics,
-                          calculate_trade_stats_by_symbol,
-                          create_interactive_dashboard,
-                          generate_monthly_returns_table, plot_equity_curve)
+from .performance import (
+    analyze_market_phases,
+    calculate_advanced_metrics,
+    calculate_trade_stats_by_symbol,
+    create_interactive_dashboard,
+    generate_monthly_returns_table,
+    plot_equity_curve,
+)
 
 
 def generate_report(
@@ -21,6 +25,12 @@ def generate_report(
     if holdings_df is None or holdings_df.empty:
         print("--- [Analysis] FAILED: No holdings data to analyze. ---")
         return
+    if holdings_df.index.duplicated().any():
+        print(
+            f"WARNING: Found {holdings_df.index.duplicated().sum()} duplicate timestamps in holdings data"
+        )
+        holdings_df = holdings_df[~holdings_df.index.duplicated(keep="last")]
+        print(f"Removed duplicates, remaining rows: {len(holdings_df)}")
 
     final_equity_curve_processed = holdings_df
 
@@ -47,45 +57,56 @@ def generate_report(
         )
 
         if not spy_data.empty:
-            spy_data.index = pd.to_datetime(spy_data.index).normalize().tz_localize(None)
-            final_equity_curve_processed.index = pd.to_datetime( final_equity_curve_processed.index).normalize().tz_localize(None)
+            spy_data.index = (
+                pd.to_datetime(spy_data.index).normalize().tz_localize(None)
+            )
+            final_equity_curve_processed.index = (
+                pd.to_datetime(final_equity_curve_processed.index)
+                .normalize()
+                .tz_localize(None)
+            )
             spy_data = spy_data.loc[spy_data.index >= start_date]
             if len(spy_data) >= 2:
                 close_prices = spy_data["Close"]
-                if hasattr(close_prices, 'values') and close_prices.values.ndim > 1:
-                    close_prices = close_prices.iloc[:, 0] if close_prices.shape[1] > 0 else close_prices.iloc[:, 0]
+                if hasattr(close_prices, "values") and close_prices.values.ndim > 1:
+                    close_prices = (
+                        close_prices.iloc[:, 0]
+                        if close_prices.shape[1] > 0
+                        else close_prices.iloc[:, 0]
+                    )
                 normalized_prices = close_prices / close_prices.iloc[0]
                 equity_values = (initial_capital * normalized_prices).values
                 if equity_values.ndim > 1:
                     equity_values = equity_values.flatten()
                 spy_equity_curve = pd.Series(
-                    equity_values,
-                    index=spy_data.index,
-                    name="total"
+                    equity_values, index=spy_data.index, name="total"
                 )
                 returns_values = close_prices.pct_change().fillna(0).values
                 if returns_values.ndim > 1:
                     returns_values = returns_values.flatten()
                 spy_returns = pd.Series(
-                    returns_values,
-                    index=spy_data.index,
-                    name="returns"
+                    returns_values, index=spy_data.index, name="returns"
                 )
-                spy_equity_curve_df = pd.DataFrame({
-                    "total": spy_equity_curve,
-                    "returns": spy_returns
-                })
+                spy_equity_curve_df = pd.DataFrame(
+                    {"total": spy_equity_curve, "returns": spy_returns}
+                )
                 spy_equity_curve_df = spy_equity_curve_df.loc[
-                    (spy_equity_curve_df.index >= start_date) &
-                    (spy_equity_curve_df.index <= end_date)
-                    ]
+                    (spy_equity_curve_df.index >= start_date)
+                    & (spy_equity_curve_df.index <= end_date)
+                ]
                 if len(spy_equity_curve_df) >= 2:
-                    benchmark_metrics = calculate_advanced_metrics(spy_equity_curve_df, initial_capital)
+                    benchmark_metrics = calculate_advanced_metrics(
+                        spy_equity_curve_df, initial_capital
+                    )
                     print("Benchmark data processed successfully.")
                 else:
-                    print("WARNING: Benchmark data alignment resulted in insufficient data points.")
+                    print(
+                        "WARNING: Benchmark data alignment resulted in insufficient data points."
+                    )
             else:
-                print("WARNING: Insufficient benchmark data for the given period. Skipping benchmark comparison.")
+                print(
+                    "WARNING: Insufficient benchmark data for the given period. Skipping benchmark comparison."
+                )
         else:
             print("WARNING: Downloaded benchmark data is empty.")
     except Exception as e:

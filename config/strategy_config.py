@@ -1,44 +1,32 @@
-# strategy_config.py - Strategy configuration module
 import importlib
 import logging
-
-from . import general_config as g_cfg
 
 # ============================================================================
 # STRATEGY SELECTION
 # ============================================================================
-CURRENT_STRATEGY = "HYBRID_DUAL_ALPHA"  # Options: "ALPHA_UNIFIED" | "HYBRID_DUAL_ALPHA"
-
-# Walk-Forward Optimization Settings
+CURRENT_STRATEGY = "HYBRID_DUAL_ALPHA"
 WFO_ENABLED = False
-WFO_TRAIN_PERIOD = 5  # Years
-WFO_TEST_PERIOD = 1  # Years
+WFO_TRAIN_PERIOD = 5
+WFO_TEST_PERIOD = 1
 
 # ============================================================================
-# STRATEGY PARAMETERS
+# ALPHA UNIFIED STRATEGY (Legacy)
 # ============================================================================
-
-# Alpha Unified Strategy Parameters
 ALPHA_UNIFIED_PARAMS = {
-    # Core alpha engine weights (must sum to 1.0)
     "momentum_weight": 0.50,
     "technical_weight": 0.30,
     "composite_weight": 0.20,
-    # Signal thresholds
     "min_alpha_score": 0.10,
     "min_confidence": 0.20,
-    # Momentum calculation windows
     "momentum_short": 5,
     "momentum_medium": 15,
     "momentum_long": 45,
     "min_momentum_threshold": -0.15,
     "volatility_scaling": True,
-    # Technical indicators
     "mean_reversion_window": 60,
     "volume_lookback": 10,
     "efficiency_window": 20,
     "trend_window": 50,
-    # Market regime detection
     "regime_lookback_short": 15,
     "regime_lookback_medium": 40,
     "regime_lookback_long": 200,
@@ -47,65 +35,129 @@ ALPHA_UNIFIED_PARAMS = {
     "enable_early_warning": True,
 }
 
-# Hybrid Dual Alpha Strategy Parameters
+# ============================================================================
+# HYBRID DUAL ALPHA STRATEGY (3-Factor Model)
+# ============================================================================
+
 HYBRID_DUAL_PARAMS = {
-    # === Allocation Controller ===
-    "base_conservative_allocation": 0.30,
-    "base_aggressive_allocation": 0.70,
-    "allocation_adaptation_enabled": True,
-    "target_max_utilization": 0.95,
-    "min_target_weight": 0.02,
-    "weight_to_score_multiplier": 10,
-    "position_change_cooldown": 3,
-    # Dynamic allocation map by market regime
-    "dynamic_allocation_map": {
-        "crisis": {"conservative": 0.90, "aggressive": 0.10},
-        "bear": {"conservative": 0.75, "aggressive": 0.25},
-        "volatile": {"conservative": 0.60, "aggressive": 0.40},
-        "recovery": {"conservative": 0.40, "aggressive": 0.60},
-        "normal": {"conservative": 0.30, "aggressive": 0.70},
-        "bull": {"conservative": 0.15, "aggressive": 0.85},
-        "strong_bull": {"conservative": 0.05, "aggressive": 0.95},
+    # === INTELLIGENT ALPHA ENGINE (4-Factor Model) ===
+    "alpha_engine": {
+        # Base weights for the four alpha factors. Must sum to 1.0.
+        "reversal_weight": 0.25,
+        "price_weight": 0.25,
+        "liquidity_weight": 0.20,
+        "momentum_weight": 0.30,
+        # Method for combining signals from different factors.
+        "combination_mode": "smart_weighted",
+        # Threshold to identify conflicting signals between factors.
+        "conflict_threshold": 0.6,
+        # Min/max constraints for dynamically adjusted factor weights.
+        "min_factor_weight": 0.01,
+        "max_factor_weight": 0.99,
+        # Configuration for the initial signal quality filter.
+        "signal_quality": {
+            "enabled": True,
+            "min_score": 0.43,
+            "min_confidence": 0.43,
+        },
+        # Configuration for cross-sectional normalization of alpha scores.
+        "normalization_enabled": True,
+        "normalization_method": "rank",  # 'rank' is robust to outliers.
     },
-    # === Shared Alpha Engine ===
-    "momentum_weight": 0.40,
-    "technical_weight": 0.35,
-    "composite_weight": 0.25,
-    "min_alpha_score": 0.30,
-    "min_confidence": 0.40,
-    # === Conservative Module ===
-    "conservative_alpha_weight": 0.25,
-    "conservative_min_confidence": 0.40,
-    "conservative_max_positions": 3,
-    "conservative_momentum_windows": [20, 60, 120],
-    "conservative_position_weights": [0.45, 0.35, 0.20],
-    "conservative_momentum_weights": [0.2, 0.3, 0.5],
-    "conservative_warning_threshold": 2,
-    "conservative_warning_multiplier": 0.5,
-    # === Aggressive Module ===
-    "aggressive_alpha_weight": 0.40,
-    "aggressive_min_confidence": 0.25,
-    "aggressive_max_positions": 12,
-    "aggressive_max_single_position": 0.15,
-    "aggressive_momentum_windows": [5, 10, 20],
-    "aggressive_momentum_weights": [0.45, 0.3, 0.25],
-    "aggressive_sizing_blend_factor": 0.5,
-    # Aggressive regime multipliers
-    "aggressive_regime_multipliers": {
-        "strong_bull": 1.5,
-        "bull": 1.3,
-        "recovery": 1.1,
-        "normal": 1.0,
-        "volatile": 0.7,
-        "bear": 0.6,
-        "crisis": 0.4,
+    # === IC-BASED DYNAMIC WEIGHTING ===
+    # Dynamically adjusts alpha factor weights based on recent performance (Information Coefficient).
+    "ic_monitoring": {
+        "enabled": True,
+        "lookback_period": 180,  # How many days of history to use for IC calculation.
+        "forward_return_period": 20,  # The future period to correlate signals against (e.g., 20 days).
+        "smoothing_alpha": 0.20,  # Smoothing factor for the IC scores (higher is more reactive).
+        "ic_threshold": 0.02,  # Minimum IC for a factor to be considered effective.
+        "ic_strong_threshold": 0.10,  # IC level to consider a factor's performance as strong.
     },
-    # Aggressive risk multipliers
-    "aggressive_risk_multipliers": {
-        "low": 1.1,
-        "medium": 1.0,
-        "high": 0.7,
-        "extreme": 0.4,
+    # === REVERSAL ALPHA PARAMETERS ===
+    # Generates signals for assets that have performed poorly and are expected to bounce back.
+    "reversal_alpha_params": {
+        "reversal_lookback": 35,  # Lookback period to identify 'loser' stocks.
+        "extreme_loser_threshold": -0.12,  # Return threshold to be considered an extreme loser.
+        "volume_surge_threshold": 1.2,  # Volume multiplier indicating capitulation.
+        "min_avg_volume": 300_000,  # Minimum average daily shares traded.
+        "min_dollar_volume": 15_000_000,  # Minimum average daily dollar volume.
+        "min_confidence": 0.30,  # Minimum confidence required for a reversal signal.
+    },
+    # === PRICE ALPHA PARAMETERS ===
+    # Generates mean-reversion signals based on technical indicators like RSI and Bollinger Bands.
+    "price_alpha_params": {
+        "rsi_period": 21,
+        "rsi_oversold": 24,  # RSI level below which a stock is considered oversold (buy signal).
+        "rsi_overbought": 76,  # RSI level above which a stock is considered overbought (sell signal).
+        "bb_period": 20,  # Lookback period for Bollinger Bands.
+        "bb_std": 2.0,  # Number of standard deviations for Bollinger Bands.
+        "min_confidence": 0.30,
+        "min_score_threshold": 0.15,
+    },
+    # === LIQUIDITY ALPHA PARAMETERS ===
+    # Generates signals based on volume and liquidity anomalies.
+    "liquidity_alpha_params": {
+        "volume_lookback": 20,
+        "volume_spike_threshold": 1.5,  # Volume increase factor to be considered a significant spike.
+        "use_amihud": True,  # Enable Amihud illiquidity measure.
+        "amihud_lookback": 20,
+        "use_obv": True,  # Enable On-Balance Volume indicator.
+        "obv_signal_period": 10,
+        "min_avg_dollar_volume": 1_000_000,  # Minimum dollar volume to be included in calculations.
+        "min_confidence": 0.30,
+    },
+    # === MOMENTUM ALPHA PARAMETERS ===
+    # Generates signals for assets that have performed well and are expected to continue.
+    "momentum_alpha_params": {
+        "formation_period": 130,  # Lookback period to measure momentum (approx. 6 months).
+        "skip_period": 21,  # Period to skip after formation to avoid short-term reversals.
+        "min_absolute_momentum": 0.05,  # Minimum return over the formation period to be considered.
+        "min_confidence": 0.30,
+        "use_volatility_control": True,  # If true, filter out the most volatile stocks.
+        "max_volatility_percentile": 0.80,  # Exclude the top 20% most volatile stocks.
+        "use_quality_filter": True,  # If true, penalize momentum signals with high drawdowns.
+        "high_dd_penalty": 0.25,  # Penalty applied for high drawdown.
+        "max_dd_threshold": 0.20,  # Drawdown level above which the penalty is applied.
+    },
+    # === MARKET DETECTOR ===
+    # Detects the overall market regime (e.g., Bull, Bear, Crisis) to adapt the strategy.
+    "market_detector_params": {
+        "lookback_short": 20,
+        "lookback_medium": 50,
+        "lookback_long": 200,
+        "bull_threshold": 0.03,
+        "crisis_threshold": -0.15,
+        "enable_macro_enhancement": True,  # Use macroeconomic data (e.g., VIX, yield curve) to refine detection.
+        "macro_indicators_subset": [
+            "T10Y2Y",
+            "VIXCLS",
+            "UNRATE",
+        ],  # Key macro indicators to use.
+        "macro_thresholds": {
+            "yield_curve_inversion": -0.20,  # Spread below which recession risk increases.
+            "vix_crisis_level": 35,  # VIX level indicating market crisis.
+            "unemployment_spike": 0.50,  # 3-month increase in unemployment rate indicating economic weakness.
+        },
+    },
+    # === POSITION SIZING ===
+    # Defines how portfolio weights are calculated and constrained.
+    "position_sizing": {
+        "weighting_scheme": "stratified_score_weighted",
+        "min_position_weight": 0.01,  # Minimum allowed weight for any single position.
+        "min_trade_size_dollars": 4000,  # Minimum trade size in dollars to reduce small, inefficient trades.
+        "rebalance_threshold": 0.10,  # Minimum weight change required to trigger a rebalance for an existing position.
+        "consensus_multiplier": 1.2,  # Weight bonus for stocks selected by both Aggressive and Conservative modules.
+    },
+    # === CONSERVATIVE MODULE ===
+    # Selects candidate stocks based on defensive characteristics.
+    "conservative_module": {
+        "conservative_min_confidence": 0.45,  # Higher confidence threshold for more reliable, defensive signals.
+    },
+    # === AGGRESSIVE MODULE ===
+    # Selects candidate stocks based on growth and momentum characteristics.
+    "aggressive_module": {
+        "aggressive_min_confidence": 0.30,  # Lower confidence threshold to capture more growth opportunities.
     },
 }
 
@@ -121,32 +173,13 @@ OPTIMIZATION_PARAMS = {
         "momentum_long": [40, 50, 60, 80],
     },
     "hybrid_dual_alpha": {
-
-        'base_conservative_allocation': (0.15, 0.65),
-        'min_target_weight': (0.005, 0.04),
-        'weight_to_score_multiplier': (5, 18),
-
-        'min_alpha_score': (0.15, 0.55),
-        'min_confidence': (0.25, 0.65),
-
-        'conservative_alpha_weight': (0.12, 0.38),
-        'conservative_min_confidence': (0.25, 0.60),
-        'conservative_max_positions': (2, 6),
-        'conservative_warning_threshold': (1, 4),
-
-        'aggressive_alpha_weight': (0.25, 0.55),
-        'aggressive_min_confidence': (0.15, 0.40),
-        'aggressive_max_positions': (6, 18),
-        'aggressive_max_single_position': (0.06, 0.20),
-        'aggressive_sizing_blend_factor': (0.25, 0.75),
-
-        'momentum_weight': (0.30, 0.55),
-        'technical_weight': (0.25, 0.50),
-        'composite_weight': (0.15, 0.40),
-
-        'target_max_utilization': (0.85, 0.98),
-        'position_change_cooldown': (1, 7),
-    }
+        "reversal_lookback": (15, 40),
+        "rsi_oversold": (20, 40),
+        "rsi_overbought": (60, 80),
+        "formation_period": (80, 180),
+        "min_score_threshold": (0.3, 0.6),
+        "min_confidence_threshold": (0.4, 0.7),
+    },
 }
 
 # ============================================================================
@@ -158,41 +191,15 @@ STRATEGY_REGISTRY = {
 }
 
 
-# ============================================================================
-# FACTORY FUNCTIONS
-# ============================================================================
-def create_strategy(events_queue, symbol_list, **kwargs):
-    """Factory function for creating strategy instances."""
-    strategy_name = kwargs.pop("name", CURRENT_STRATEGY)
-
+def get_strategy_class(strategy_name: str):
+    """Get strategy class from registry."""
     if strategy_name not in STRATEGY_REGISTRY:
-        raise ValueError(f"Strategy '{strategy_name}' not found in STRATEGY_REGISTRY")
-
-    # Dynamic import
+        raise ValueError(f"Unknown strategy: {strategy_name}")
     module_path, class_name = STRATEGY_REGISTRY[strategy_name].split(":")
     module = importlib.import_module(module_path)
-    StrategyClass = getattr(module, class_name)
-
-    # Select parameters
-    if strategy_name == "ALPHA_UNIFIED":
-        params = ALPHA_UNIFIED_PARAMS.copy()
-    elif strategy_name == "HYBRID_DUAL_ALPHA":
-        params = HYBRID_DUAL_PARAMS.copy()
-    else:
-        params = {}
-
-    # Merge with overrides and add global symbols
-    params.update(kwargs)
-    params["risk_on_symbols"] = g_cfg.RISK_ON_SYMBOLS
-    params["risk_off_symbols"] = g_cfg.RISK_OFF_SYMBOLS
-
-    logging.info(f"Creating strategy instance: {strategy_name}")
-    return StrategyClass(events_queue, symbol_list, **params)
+    return getattr(module, class_name)
 
 
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
 def get_current_strategy_params():
     """Get parameters for current strategy."""
     if CURRENT_STRATEGY == "ALPHA_UNIFIED":
@@ -202,83 +209,34 @@ def get_current_strategy_params():
     return {}
 
 
-def get_optimization_params():
-    """Get optimization parameters for current strategy."""
-    return OPTIMIZATION_PARAMS.get(CURRENT_STRATEGY.lower(), {})
-
-
-def update_strategy_param(param_name, new_value):
-    """Update a specific strategy parameter."""
-    if param_name in ALPHA_UNIFIED_PARAMS:
-        ALPHA_UNIFIED_PARAMS[param_name] = new_value
-        return True
-    return False
-
-
-def print_config_summary():
-    """Print strategy configuration summary."""
-    print("=" * 60)
-    print("Strategy Configuration Summary")
-    print("=" * 60)
-    print(f"Current Strategy: {CURRENT_STRATEGY}")
-    print(f"WFO Status: {'Enabled' if WFO_ENABLED else 'Disabled'}")
-
-    if CURRENT_STRATEGY == "ALPHA_UNIFIED":
-        p = ALPHA_UNIFIED_PARAMS
-        print(f"\nAlpha Weights:")
-        print(f"  Momentum: {p['momentum_weight']:.1%}")
-        print(f"  Technical: {p['technical_weight']:.1%}")
-        print(f"  Composite: {p['composite_weight']:.1%}")
-    elif CURRENT_STRATEGY == "HYBRID_DUAL_ALPHA":
-        p = HYBRID_DUAL_PARAMS
-        print(f"\nBase Allocation:")
-        print(f"  Conservative: {p['base_conservative_allocation']:.1%}")
-        print(f"  Aggressive: {p['base_aggressive_allocation']:.1%}")
-
-    print("=" * 60)
-
-
 def validate_config():
     """Validate strategy configuration."""
     errors = []
     warnings = []
 
-    # Validate ALPHA_UNIFIED weights
-    weight_sum = (
-        ALPHA_UNIFIED_PARAMS["momentum_weight"]
-        + ALPHA_UNIFIED_PARAMS["technical_weight"]
-        + ALPHA_UNIFIED_PARAMS["composite_weight"]
-    )
-    if abs(weight_sum - 1.0) > 0.01:
-        errors.append(f"Alpha weights must sum to 1.0, got {weight_sum}")
+    if CURRENT_STRATEGY == "HYBRID_DUAL_ALPHA":
+        config = HYBRID_DUAL_PARAMS
 
-    # Validate momentum windows
-    if not (
-        ALPHA_UNIFIED_PARAMS["momentum_short"]
-        < ALPHA_UNIFIED_PARAMS["momentum_medium"]
-        < ALPHA_UNIFIED_PARAMS["momentum_long"]
-    ):
-        errors.append("Momentum windows must be in ascending order")
+        engine = config.get("alpha_engine", {})
+        weight_sum = (
+            engine.get("liquidity_weight", 0)
+            + engine.get("reversal_weight", 0)
+            + engine.get("price_weight", 0)
+            + engine.get("momentum_weight", 0)
+        )
+        if abs(weight_sum - 1.0) > 0.01:
+            errors.append(f"Alpha engine weights must sum to 1.0, got {weight_sum}")
 
     return errors, warnings
 
 
-# ============================================================================
-# AUTO-VALIDATION
-# ============================================================================
-if __name__ == "__main__":
+if __name__ != "__main__":
     errors, warnings = validate_config()
-
-    if errors:
-        print("Strategy Configuration Errors:")
-        for error in errors:
-            print(f"  - {error}")
-
     if warnings:
-        print("Strategy Configuration Warnings:")
         for warning in warnings:
-            print(f"  - {warning}")
-
-    logger = logging.getLogger(__name__)
-    logger.info(f"Strategy configuration loaded: {CURRENT_STRATEGY}")
-    logger.info(f"WFO status: {'Enabled' if WFO_ENABLED else 'Disabled'}")
+            logging.warning(f"Config warning: {warning}")
+    if errors:
+        error_message = "Strategy config validation failed:\n  - " + "\n  - ".join(
+            errors
+        )
+        raise ValueError(error_message)

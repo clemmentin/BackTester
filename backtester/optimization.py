@@ -194,8 +194,8 @@ class ParameterOptimizer:
         self,
         train_data: pd.DataFrame,
         start_date: str,
-        n_calls: int = 40,
-        n_initial_points: int = 8,
+        n_calls: int = 120,
+        n_initial_points: int = 25,
         show_progress: bool = True,
     ) -> OptimizationResult:
         start_time = time.time()
@@ -275,11 +275,9 @@ class ParameterOptimizer:
                 n_calls=n_calls,
                 n_initial_points=n_initial_points,
                 acq_func="EI",
-                random_state=42,
+                random_state=config.GLOBAL_RANDOM_SEED,
                 verbose=False,
             )
-
-            print()  # New line
 
             best_params = dict(zip(self.param_names, result.x))
             best_score = -result.fun if result.fun < 1000 else -1.0
@@ -329,14 +327,15 @@ def run_walk_forward_optimization(
 ) -> Dict[str, Any]:
     """Performs a walk-forward optimization of the strategy."""
     logging.info("--- [WFO] Starting Walk-Forward Optimization ---")
+
     param_grid = strategy_config.OPTIMIZATION_PARAMS.get(
         strategy_config.CURRENT_STRATEGY.lower(), {}
     )
     if not param_grid:
-        logging.error(
-            "No optimization parameters found for the current strategy. Aborting WFO."
-        )
+        logging.error("No optimization parameters found. Aborting WFO.")
         return {}
+
+    all_fold_results = []
 
     wfo_all_optimization_runs = []
     overall_start_date = pd.to_datetime(start_date)
@@ -350,31 +349,61 @@ def run_walk_forward_optimization(
     USE_BAYESIAN_OPTIMIZATION = True
     fold_capital = config.INITIAL_CAPITAL
     fold_num = 1
+
+    print("\n" + "=" * 80)
+    print("WALK-FORWARD OPTIMIZATION CONFIGURATION")
+    print("=" * 80)
+    print(f"Training Period: {train_years} years")
+    print(f"Testing Period: {test_years} year(s)")
+    print(
+        f"Optimization Method: {'Bayesian' if USE_BAYESIAN_OPTIMIZATION else 'Grid Search'}"
+    )
+    print(f"Parameters to optimize: {list(param_grid.keys())}")
+    print(f"Start Date: {overall_start_date.date()}")
+    print(f"End Date: {end_date.date()}")
+    print("=" * 80 + "\n")
+
     while (train_start + relativedelta(years=train_years + test_years)) <= end_date:
         train_end = train_start + relativedelta(years=train_years)
         test_end = train_end + relativedelta(years=test_years)
-        logging.info(
-            f"\n===== WFO Fold {fold_num} | Train: {train_start.date()}-{train_end.date()} | Test: {train_end.date()}-{test_end.date()} ====="
-        )
+
+        print("\n" + "=" * 80)
+        print(f"WFO FOLD {fold_num}")
+        print("=" * 80)
+        print(f"Training Period:  {train_start.date()} to {train_end.date()}")
+        print(f"Testing Period:   {train_end.date()} to {test_end.date()}")
+        print(f"Initial Capital:  ${fold_capital:,.2f}")
+        print("-" * 80)
 
         timestamps = all_available_data.index.get_level_values("timestamp")
         train_mask = (timestamps >= train_start) & (timestamps < train_end)
         train_data = all_available_data[train_mask]
 
-        test_mask = (timestamps >= train_start) & (timestamps < test_end)
+        OOS_LOOKBACK_BUFFER = timedelta(days=1250)
+        oos_data_start = train_end - OOS_LOOKBACK_BUFFER
+
+        if (
+            oos_data_start
+            < all_available_data.index.get_level_values("timestamp").min()
+        ):
+            oos_data_start = all_available_data.index.get_level_values(
+                "timestamp"
+            ).min()
+
+        test_mask = (timestamps >= oos_data_start) & (timestamps < test_end)
         test_data = all_available_data[test_mask]
 
         if train_data.empty:
             logging.warning("Insufficient training data for this fold, skipping.")
         else:
             optimizer = ParameterOptimizer(objective_function_wrapper, param_grid)
+
             if USE_BAYESIAN_OPTIMIZATION:
-                # Use Bayesian optimization (MUCH faster)
                 opt_result = optimizer.optimize_bayesian(
                     train_data,
                     start_date=train_start.strftime("%Y-%m-%d"),
-                    n_calls=80,
-                    n_initial_points=15,
+                    n_calls=50,
+                    n_initial_points=10,
                     show_progress=True,
                 )
             else:
@@ -383,9 +412,34 @@ def run_walk_forward_optimization(
                 )
 
             if opt_result.best_params:
-                logging.info(
-                    f"Best params found: {opt_result.best_params} (Score: {opt_result.best_score:.3f})"
-                )
+                print("\n" + "-" * 80)
+                print("OPTIMIZATION RESULTS:")
+                print("-" * 80)
+                print(f"Best Score: {opt_result.best_score:.4f}")
+                print(f"Optimization Time: {opt_result.optimization_time:.1f}s")
+                print(f"Iterations: {opt_result.iterations}")
+                print("\nBest Parameters Found:")
+                print("-" * 80)
+
+                for param_name, param_value in sorted(opt_result.best_params.items()):
+                    if isinstance(param_value, float):
+                        print(f"  {param_name:35s}: {param_value:.4f}")
+                    else:
+                        print(f"  {param_name:35s}: {param_value}")
+
+                print("-" * 80)
+
+                fold_result = {
+                    "fold": fold_num,
+                    "train_start": train_start.date(),
+                    "train_end": train_end.date(),
+                    "test_start": train_end.date(),
+                    "test_end": test_end.date(),
+                    "optimization_score": opt_result.best_score,
+                    "optimization_time": opt_result.optimization_time,
+                    **opt_result.best_params,
+                }
+
                 oos_engine = BacktestEngine(
                     symbol_list=config.SYMBOLS,
                     initial_capital=fold_capital,
@@ -396,13 +450,28 @@ def run_walk_forward_optimization(
                     **opt_result.best_params,
                 )
                 oos_engine.run()
+
                 holdings_df = pd.DataFrame(oos_engine.portfolio.all_holdings)
                 if not holdings_df.empty:
-                    oos_results = (
-                        holdings_df.copy()
-                    )  # No need to filter again as engine starts at the right date
+                    oos_results = holdings_df.copy()
+
                     if not oos_results.empty:
                         initial_fold_val = oos_results["total"].iloc[0]
+                        final_fold_val = oos_results["total"].iloc[-1]
+                        fold_return = (final_fold_val / initial_fold_val) - 1
+
+                        fold_result["oos_initial_value"] = initial_fold_val
+                        fold_result["oos_final_value"] = final_fold_val
+                        fold_result["oos_return"] = fold_return
+
+                        print("\nOUT-OF-SAMPLE PERFORMANCE:")
+                        print("-" * 80)
+                        print(f"  Initial Value: ${initial_fold_val:,.2f}")
+                        print(f"  Final Value:   ${final_fold_val:,.2f}")
+                        print(f"  Return:        {fold_return:+.2%}")
+                        print(f"  New Capital:   ${final_fold_val:,.2f}")
+                        print("=" * 80 + "\n")
+
                         scale_factor = fold_capital / initial_fold_val
                         monetary_cols = ["cash", "total"] + [
                             s for s in config.SYMBOLS if s in oos_results.columns
@@ -411,29 +480,81 @@ def run_walk_forward_optimization(
                             oos_results[col] *= scale_factor
 
                         all_oos_holdings.append(oos_results)
-                        all_oos_trades.extend(
-                            oos_engine.portfolio.all_trades
-                        )  # Collect trades
+                        all_oos_trades.extend(oos_engine.portfolio.all_trades)
                         fold_capital = oos_results["total"].iloc[-1]
-                        logging.info(
-                            f"Fold {fold_num} complete. New capital: ${fold_capital:,.2f}"
-                        )
+
+                all_fold_results.append(fold_result)
+
             else:
-                logging.warning(
-                    "Optimization failed to find best parameters for this fold."
-                )
+                logging.warning("Optimization failed for this fold.")
+
         train_start += relativedelta(years=test_years)
         fold_num += 1
-    if wfo_all_optimization_runs:
-        logging.info(
-            "\n--- [WFO] Saving detailed optimization results to CSV file... ---"
+
+    if all_fold_results:
+        print("\n" + "=" * 80)
+        print("WFO PARAMETER EVOLUTION SUMMARY")
+        print("=" * 80)
+
+        results_df = pd.DataFrame(all_fold_results)
+
+        print("\nFold-by-Fold Results:")
+        print("-" * 80)
+
+        display_cols = ["fold", "train_start", "test_start", "optimization_score"]
+
+        param_cols = [
+            col
+            for col in results_df.columns
+            if col not in display_cols
+            and col
+            not in [
+                "train_end",
+                "test_end",
+                "optimization_time",
+                "oos_initial_value",
+                "oos_final_value",
+            ]
+        ]
+
+        display_cols.extend(param_cols)
+        display_cols.append("oos_return")
+
+        print(results_df[display_cols].to_string(index=False))
+
+        csv_filename = (
+            f"wfo_results_{overall_start_date.date()}_to_{end_date.date()}.csv"
         )
-        results_df = pd.DataFrame(wfo_all_optimization_runs)
-        param_cols = list(param_grid.keys())
-        other_cols = [col for col in results_df.columns if col not in param_cols]
-        results_df = results_df[other_cols + param_cols]
-        results_df.to_csv("wfo_optimization_results.csv", index=False)
-        logging.info("Detailed results saved to 'wfo_optimization_results.csv'")
+        results_df.to_csv(csv_filename, index=False)
+        print(f"\n results saved to: {csv_filename}")
+
+        print("\n" + "-" * 80)
+        print("PARAMETER STABILITY ANALYSIS:")
+        print("-" * 80)
+
+        for param in param_cols:
+            if param in results_df.columns:
+                values = results_df[param].dropna()
+                if len(values) > 0:
+                    mean_val = values.mean()
+                    std_val = values.std()
+                    min_val = values.min()
+                    max_val = values.max()
+
+                    cv = (std_val / mean_val) if mean_val != 0 else 0
+
+                    stability = (
+                        "STABLE"
+                        if cv < 0.15
+                        else ("MODERATE" if cv < 0.30 else "VOLATILE")
+                    )
+
+                    print(f"\n{param}:")
+                    print(f"  Mean: {mean_val:.4f} | Std: {std_val:.4f} | CV: {cv:.2%}")
+                    print(f"  Range: [{min_val:.4f}, {max_val:.4f}]")
+                    print(f"  Stability: {stability}")
+
+        print("=" * 80 + "\n")
 
     if not all_oos_holdings:
         logging.error("[WFO] No successful folds. Returning empty results.")
@@ -444,13 +565,15 @@ def run_walk_forward_optimization(
     )
     final_holdings["returns"] = final_holdings["total"].pct_change()
     final_trades = pd.DataFrame(all_oos_trades)
+
     logging.info(f"[WFO] Final combined out-of-sample results generated.")
     run_and_display_monte_carlo(final_holdings)
 
     return {
         "holdings": final_holdings,
-        "trade_statistics": None,  # WFO trade stats are complex, can be calculated in analysis
+        "trade_statistics": None,
         "closed_trades": final_trades,
+        "wfo_fold_results": all_fold_results,
     }
 
 

@@ -1,6 +1,7 @@
 from typing import Dict
 import numpy as np
 import pandas as pd
+import config
 
 
 class MonteCarloSimulator:
@@ -21,6 +22,7 @@ class MonteCarloSimulator:
         Simulates future price paths using the historical return distribution.
         """
         # Generate random returns based on historical mean and std
+        np.random.seed(config.GLOBAL_RANDOM_SEED)
         random_returns = np.random.normal(
             self.mean_return, self.std_return, size=(num_simulations, num_days)
         )
