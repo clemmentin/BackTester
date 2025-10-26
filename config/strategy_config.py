@@ -7,7 +7,7 @@ import logging
 CURRENT_STRATEGY = "HYBRID_DUAL_ALPHA"
 
 # Walk-forward optimization settings
-WFO_ENABLED = True
+WFO_ENABLED = False
 WFO_TRAIN_PERIOD = 5  # years
 WFO_TEST_PERIOD = 1  # year
 
@@ -185,7 +185,14 @@ STRATEGY_REGISTRY = {
 
 
 def get_strategy_class(strategy_name: str):
-    """Get strategy class from registry"""
+    """Get strategy class from registry
+
+    Args:
+      strategy_name: str:
+
+    Returns:
+
+    """
     if strategy_name not in STRATEGY_REGISTRY:
         raise ValueError(f"Unknown strategy: {strategy_name}")
     module_path, class_name = STRATEGY_REGISTRY[strategy_name].split(":")

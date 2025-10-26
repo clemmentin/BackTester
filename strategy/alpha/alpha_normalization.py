@@ -7,9 +7,7 @@ from strategy.contracts import RawAlphaSignalDict
 
 
 class AlphaNormalizer:
-    """
-    Performs cross-sectional normalization and neutralization for alpha signals.
-    """
+    """Performs cross-sectional normalization and neutralization for alpha signals."""
 
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
@@ -28,8 +26,14 @@ class AlphaNormalizer:
         alpha_signals: RawAlphaSignalDict,
         market_data: Optional[pd.DataFrame] = None,
     ) -> RawAlphaSignalDict:
-        """
-        The main pipeline to normalize raw alpha signals.
+        """The main pipeline to normalize raw alpha signals.
+
+        Args:
+          alpha_signals: RawAlphaSignalDict: 
+          market_data: Optional[pd.DataFrame]:  (Default value = None)
+
+        Returns:
+
         """
         # ... (This function's internal comments and logic are already clean)
         if not alpha_signals:
@@ -61,8 +65,14 @@ class AlphaNormalizer:
     def _get_betas_with_cache(
         self, symbols: List[str], market_data: pd.DataFrame
     ) -> Optional[np.ndarray]:
-        """
-        Calculates or retrieves from cache the market betas for a list of symbols.
+        """Calculates or retrieves from cache the market betas for a list of symbols.
+
+        Args:
+          symbols: List[str]: 
+          market_data: pd.DataFrame: 
+
+        Returns:
+
         """
         cache_key = tuple(sorted(symbols))
         latest_time = market_data.index.get_level_values("timestamp").max()
@@ -89,9 +99,15 @@ class AlphaNormalizer:
     def _calculate_betas(
         self, symbols: List[str], market_data: pd.DataFrame
     ) -> Optional[np.ndarray]:
-        """
-        Calculates market beta for each symbol using SPY as a market proxy.
+        """Calculates market beta for each symbol using SPY as a market proxy.
         This function is vectorized for performance.
+
+        Args:
+          symbols: List[str]: 
+          market_data: pd.DataFrame: 
+
+        Returns:
+
         """
         # 1. Check for presence of market proxy (SPY).
         if "SPY" not in market_data.index.get_level_values("symbol"):
@@ -139,6 +155,14 @@ class AlphaNormalizer:
 
     # ... (other helper methods like _validate_and_clean_scores, etc., remain the same)
     def _validate_and_clean_scores(self, scores: np.ndarray) -> np.ndarray:
+        """
+
+        Args:
+          scores: np.ndarray: 
+
+        Returns:
+
+        """
         if len(scores) == 0:
             return scores
         invalid_mask = ~np.isfinite(scores)
@@ -147,6 +171,14 @@ class AlphaNormalizer:
         return scores
 
     def _winsorize_percentile(self, scores: np.ndarray) -> np.ndarray:
+        """
+
+        Args:
+          scores: np.ndarray: 
+
+        Returns:
+
+        """
         if len(scores) < 3:
             return scores
         lower_bound = np.percentile(scores, self.winsorize_percentile * 100)
@@ -154,6 +186,14 @@ class AlphaNormalizer:
         return np.clip(scores, lower_bound, upper_bound)
 
     def _apply_normalization(self, scores: np.ndarray) -> np.ndarray:
+        """
+
+        Args:
+          scores: np.ndarray: 
+
+        Returns:
+
+        """
         if self.normalization_method == "zscore":
             return self._zscore_normalize(scores)
         elif self.normalization_method == "minmax":
@@ -162,11 +202,27 @@ class AlphaNormalizer:
             return self._rank_normalize(scores)
 
     def _zscore_normalize(self, scores: np.ndarray) -> np.ndarray:
+        """
+
+        Args:
+          scores: np.ndarray: 
+
+        Returns:
+
+        """
         if len(scores) < 2 or np.std(scores) < 1e-8:
             return scores - np.mean(scores)
         return np.clip((scores - np.mean(scores)) / np.std(scores, ddof=1), -3.0, 3.0)
 
     def _rank_normalize(self, scores: np.ndarray) -> np.ndarray:
+        """
+
+        Args:
+          scores: np.ndarray: 
+
+        Returns:
+
+        """
         if len(scores) < 2:
             return scores
         ranks = stats.rankdata(scores, method="average")
@@ -177,6 +233,14 @@ class AlphaNormalizer:
         )
 
     def _minmax_normalize(self, scores: np.ndarray) -> np.ndarray:
+        """
+
+        Args:
+          scores: np.ndarray: 
+
+        Returns:
+
+        """
         if len(scores) < 2:
             return scores
         min_val, max_val = np.min(scores), np.max(scores)
@@ -187,6 +251,16 @@ class AlphaNormalizer:
     def _beta_neutralize(
         self, scores: np.ndarray, symbols: List[str], market_data: pd.DataFrame
     ) -> np.ndarray:
+        """
+
+        Args:
+          scores: np.ndarray: 
+          symbols: List[str]: 
+          market_data: pd.DataFrame: 
+
+        Returns:
+
+        """
         betas = self._get_betas_with_cache(symbols, market_data)
         if betas is None or len(betas) != len(scores) or np.std(betas) < 1e-4:
             return scores
@@ -202,6 +276,15 @@ class AlphaNormalizer:
     def _assess_normalization_quality(
         self, original: np.ndarray, normalized: np.ndarray
     ) -> float:
+        """
+
+        Args:
+          original: np.ndarray: 
+          normalized: np.ndarray: 
+
+        Returns:
+
+        """
         if len(original) < 3 or np.std(original) < 1e-8 or np.std(normalized) < 1e-8:
             return 0.5
         rank_corr, _ = stats.spearmanr(original, normalized)

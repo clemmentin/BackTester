@@ -4,6 +4,7 @@ import numpy as np
 
 
 class SimulatedExecutionHandler:
+    """ """
     def __init__(self, events_queue, data_handler, transaction_costs_config=None):
         self.events = events_queue
         self.data_handler = data_handler
@@ -23,6 +24,14 @@ class SimulatedExecutionHandler:
         self.min_commission = transaction_costs_config.get("min_commission", 1.0)
 
     def execute_order(self, event):
+        """
+
+        Args:
+          event: 
+
+        Returns:
+
+        """
         if event.type != "Order":
             return
 
@@ -94,4 +103,12 @@ class SimulatedExecutionHandler:
         self.events.put(fill_event)
 
     def calculate_commission(self, fill_cost):
+        """
+
+        Args:
+          fill_cost: 
+
+        Returns:
+
+        """
         return max(self.min_commission, fill_cost * self.commission_rate)

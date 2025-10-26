@@ -14,6 +14,7 @@ from strategy.contracts import RiskBudget
 
 
 class RiskLevel(Enum):
+    """ """
     NORMAL = "normal"
     CAUTIOUS = "cautious"
     RECOVERY = "recovery"
@@ -23,6 +24,7 @@ class RiskLevel(Enum):
 
 
 class RiskManager:
+    """ """
     def __init__(self, initial_capital: float, config_dict: Dict):
         self.logger = logging.getLogger(__name__)
         self.initial_capital = initial_capital
@@ -121,6 +123,16 @@ class RiskManager:
         timestamp: datetime,
         market_state: MarketState,
     ) -> RiskBudget:
+        """
+
+        Args:
+          portfolio_value: float: 
+          timestamp: datetime: 
+          market_state: MarketState: 
+
+        Returns:
+
+        """
 
         self._update_drawdown(portfolio_value, timestamp)
         self.portfolio_value_history.append(portfolio_value)
@@ -171,6 +183,15 @@ class RiskManager:
         return final_budget
 
     def _update_drawdown(self, current_value: float, timestamp: datetime):
+        """
+
+        Args:
+          current_value: float: 
+          timestamp: datetime: 
+
+        Returns:
+
+        """
         history_array = np.array(self.portfolio_value_history)
         rolling_peak = np.max(history_array)
         if rolling_peak > 0:
@@ -179,6 +200,7 @@ class RiskManager:
             self.current_drawdown = 0.0
 
     def _calculate_cvar_scaler(self) -> float:
+        """ """
         if (
             not self.cvar_control_enabled
             or len(self.portfolio_value_history) < self.cvar_lookback
@@ -211,6 +233,14 @@ class RiskManager:
         return scaler
 
     def _calculate_continuous_risk_score(self, market_state: MarketState) -> float:
+        """
+
+        Args:
+          market_state: MarketState: 
+
+        Returns:
+
+        """
         drawdown_score = np.clip(
             1.0 - (self.current_drawdown / self.max_drawdown), 0, 1
         )
@@ -242,6 +272,15 @@ class RiskManager:
     def _check_recovery_complete(
         self, portfolio_value: float, timestamp: datetime
     ) -> bool:
+        """
+
+        Args:
+          portfolio_value: float: 
+          timestamp: datetime: 
+
+        Returns:
+
+        """
         recovered_drawdown = self.current_drawdown < self.max_drawdown * (
             1 - self.recovery_threshold
         )
@@ -253,6 +292,7 @@ class RiskManager:
         return recovered_drawdown and cooldown_passed
 
     def _calculate_volatility_scaler(self) -> float:
+        """ """
         if len(self.portfolio_value_history) < self.volatility_lookback:
             return 1.0
 

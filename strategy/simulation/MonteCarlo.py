@@ -5,6 +5,7 @@ import config
 
 
 class MonteCarloSimulator:
+    """ """
     def __init__(self, returns_data: pd.Series):
         self.returns_data = returns_data.dropna()
         if self.returns_data.empty:
@@ -18,8 +19,15 @@ class MonteCarloSimulator:
     def simulate_price_paths(
         self, initial_price: float, num_days: int, num_simulations: int = 1000
     ) -> np.ndarray:
-        """
-        Simulates future price paths using the historical return distribution.
+        """Simulates future price paths using the historical return distribution.
+
+        Args:
+          initial_price: float: 
+          num_days: int: 
+          num_simulations: int:  (Default value = 1000)
+
+        Returns:
+
         """
         # Generate random returns based on historical mean and std
         np.random.seed(config.GLOBAL_RANDOM_SEED)
@@ -39,8 +47,14 @@ class MonteCarloSimulator:
     def calculate_risk_metrics(
         self, price_paths: np.ndarray, confidence_level: float = 0.05
     ) -> Dict:
-        """
-        Calculates key risk metrics from the simulated price paths.
+        """Calculates key risk metrics from the simulated price paths.
+
+        Args:
+          price_paths: np.ndarray: 
+          confidence_level: float:  (Default value = 0.05)
+
+        Returns:
+
         """
         final_prices = price_paths[:, -1]
         initial_price = price_paths[0, 0]

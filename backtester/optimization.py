@@ -35,9 +35,15 @@ class OptimizationResult:
 def calculate_strategy_score(
     equity_curve_df: pd.DataFrame, trade_stats: Dict = None
 ) -> float:
-    """
-    Calculate an enhanced, risk-adjusted score for a strategy's performance.
+    """Calculate an enhanced, risk-adjusted score for a strategy's performance.
     A higher score indicates better risk-adjusted returns.
+
+    Args:
+      equity_curve_df: pd.DataFrame: 
+      trade_stats: Dict:  (Default value = None)
+
+    Returns:
+
     """
     if equity_curve_df.empty or len(equity_curve_df) < 20:
         return -1.0
@@ -70,8 +76,13 @@ def calculate_strategy_score(
 
 
 def objective_function_wrapper(params_data_tuple: Tuple) -> float:
-    """
-    A top-level wrapper for multiprocessing. It runs a single backtest and returns its score.
+    """A top-level wrapper for multiprocessing. It runs a single backtest and returns its score.
+
+    Args:
+      params_data_tuple: Tuple: 
+
+    Returns:
+
     """
     params, symbols, initial_capital, start_date, risk_on, risk_off, train_data = (
         params_data_tuple
@@ -129,6 +140,17 @@ class ParameterOptimizer:
         max_workers: int = None,
         show_progress: bool = True,
     ) -> OptimizationResult:
+        """
+
+        Args:
+          train_data: pd.DataFrame: 
+          start_date: str: 
+          max_workers: int:  (Default value = None)
+          show_progress: bool:  (Default value = True)
+
+        Returns:
+
+        """
         start_time = time.time()
         logging.info(
             f"Starting parallel grid search for period starting {start_date}..."
@@ -200,6 +222,18 @@ class ParameterOptimizer:
         n_initial_points: int = 25,
         show_progress: bool = True,
     ) -> OptimizationResult:
+        """
+
+        Args:
+          train_data: pd.DataFrame: 
+          start_date: str: 
+          n_calls: int:  (Default value = 120)
+          n_initial_points: int:  (Default value = 25)
+          show_progress: bool:  (Default value = True)
+
+        Returns:
+
+        """
         start_time = time.time()
         logging.info(
             f"Starting Bayesian optimization for period starting {start_date}..."
@@ -229,6 +263,14 @@ class ParameterOptimizer:
         # Define objective for skopt
         @use_named_args(dimensions)
         def objective(**params):
+            """
+
+            Args:
+              **params: 
+
+            Returns:
+
+            """
             iteration[0] += 1
 
             # Prepare task data
@@ -313,7 +355,14 @@ class ParameterOptimizer:
 
 
 def select_robust_parameters(optimization_results: List[Tuple]) -> Dict:
-    """Selects robust parameters from optimization results."""
+    """Selects robust parameters from optimization results.
+
+    Args:
+      optimization_results: List[Tuple]: 
+
+    Returns:
+
+    """
     if not optimization_results:
         return None
     valid_results = [r for r in optimization_results if r[1] > -np.inf]
@@ -327,7 +376,15 @@ def select_robust_parameters(optimization_results: List[Tuple]) -> Dict:
 def run_walk_forward_optimization(
     all_available_data: pd.DataFrame, start_date: str = None
 ) -> Dict[str, Any]:
-    """Performs a walk-forward optimization of the strategy."""
+    """Performs a walk-forward optimization of the strategy.
+
+    Args:
+      all_available_data: pd.DataFrame: 
+      start_date: str:  (Default value = None)
+
+    Returns:
+
+    """
     logging.info("--- [WFO] Starting Walk-Forward Optimization ---")
 
     param_grid = strategy_config.OPTIMIZATION_PARAMS.get(
@@ -585,8 +642,14 @@ def run_walk_forward_optimization(
 def run_single_simple_backtest(
     all_available_data: pd.DataFrame, start_date: str = None
 ) -> Dict[str, Any]:
-    """
-    Runs a single backtest using default parameters and returns results with diagnostics.
+    """Runs a single backtest using default parameters and returns results with diagnostics.
+
+    Args:
+      all_available_data: pd.DataFrame: 
+      start_date: str:  (Default value = None)
+
+    Returns:
+
     """
     logging.info("--- [Backtester] Starting Single Backtest ---")
     params = strategy_config.get_current_strategy_params()
@@ -638,7 +701,14 @@ def run_single_simple_backtest(
 
 
 def run_and_display_monte_carlo(equity_curve: pd.DataFrame):
-    """Runs a Monte Carlo simulation on an equity curve and logs the results."""
+    """Runs a Monte Carlo simulation on an equity curve and logs the results.
+
+    Args:
+      equity_curve: pd.DataFrame: 
+
+    Returns:
+
+    """
     if (
         equity_curve.empty
         or "returns" not in equity_curve.columns
@@ -704,7 +774,14 @@ def run_and_display_monte_carlo(equity_curve: pd.DataFrame):
 
 
 def clear_bayesian_priors(directory="./data/bayesian_priors"):
-    """Deletes all .json files in the priors directory to ensure a clean slate."""
+    """Deletes all .json files in the priors directory to ensure a clean slate.
+
+    Args:
+      directory:  (Default value = "./data/bayesian_priors")
+
+    Returns:
+
+    """
     import os
     import glob
 

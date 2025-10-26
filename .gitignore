@@ -23,6 +23,7 @@ alpha_strategy.py
 monitoring.py
 legacy/
 *.csv
+*.png
 LogBook.txt
 test3.py
 test4.py

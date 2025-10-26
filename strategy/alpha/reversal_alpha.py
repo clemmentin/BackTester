@@ -7,6 +7,7 @@ from strategy.alpha.market_detector import MarketState, MarketRegime
 
 
 class ReversalAlphaModule:
+    """ """
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
         params = kwargs.get("reversal_alpha_params", {})
@@ -69,7 +70,14 @@ class ReversalAlphaModule:
         )
 
     def _get_dynamic_lookbacks(self, market_state: MarketState) -> Tuple[int, int]:
-        """NEW: Determines reversal lookback periods based on the market state."""
+        """NEW: Determines reversal lookback periods based on the market state.
+
+        Args:
+          market_state: MarketState: 
+
+        Returns:
+
+        """
         base_short, base_long = 21, 42
 
         # Adjust based on volatility regime
@@ -100,6 +108,19 @@ class ReversalAlphaModule:
         liquid_symbols: pd.Index,
         threshold_multiplier: float,
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          prices: pd.DataFrame: 
+          volumes: pd.DataFrame: 
+          timestamp: pd.Timestamp: 
+          lookback_period: int: 
+          liquid_symbols: pd.Index: 
+          threshold_multiplier: float: 
+
+        Returns:
+
+        """
         if lookback_period > len(prices):
             return pd.DataFrame()
 
@@ -148,6 +169,18 @@ class ReversalAlphaModule:
         timestamp: pd.Timestamp,
         market_state: MarketState,  # MODIFIED: Now accepts the full MarketState object
     ) -> Dict[str, RawAlphaSignal]:
+        """
+
+        Args:
+          prices: pd.DataFrame: 
+          volumes: pd.DataFrame: 
+          timestamp: pd.Timestamp: 
+          market_state: MarketState: 
+          # MODIFIED: Now accepts the full MarketState object: 
+
+        Returns:
+
+        """
 
         # NEW: Dynamically determine lookback periods for this specific timestamp.
         short_lookback, long_lookback = self._get_dynamic_lookbacks(market_state)

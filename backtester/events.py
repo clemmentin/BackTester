@@ -1,8 +1,10 @@
 class Event:
+    """ """
     pass
 
 
 class MarketEvent(Event):
+    """ """
     def __init__(self, timestamp, symbol, data):
         self.type = "Market"
         self.timestamp = timestamp
@@ -11,6 +13,7 @@ class MarketEvent(Event):
 
 
 class SignalEvent(Event):
+    """ """
     def __init__(self, timestamp, symbol, signal_type, score=1.0, strength=1.0):
         self.type = "Signal"
         self.timestamp = timestamp
@@ -21,6 +24,7 @@ class SignalEvent(Event):
 
 
 class OrderEvent(Event):
+    """ """
     def __init__(self, timestamp, symbol, order_type, quantity, direction):
         self.type = "Order"
         self.timestamp = timestamp
@@ -31,6 +35,7 @@ class OrderEvent(Event):
 
 
 class FillEvent(Event):
+    """ """
     def __init__(self, timestamp, symbol, quantity, direction, fill_cost, commission):
         self.type = "Fill"
         self.timestamp = timestamp

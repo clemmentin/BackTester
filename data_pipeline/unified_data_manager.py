@@ -19,6 +19,7 @@ load_dotenv()
 
 
 class UnifiedDataManager:
+    """ """
     def __init__(self, config_module: Any = config):
         self.config = config_module
         self.logger = logging.getLogger(__name__)
@@ -76,6 +77,16 @@ class UnifiedDataManager:
         skip_features: bool = False,
         start_date: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
+        """
+
+        Args:
+          force_refresh: bool:  (Default value = False)
+          skip_features: bool:  (Default value = False)
+          start_date: Optional[str]:  (Default value = None)
+
+        Returns:
+
+        """
 
         # Step 1: Fetch all raw data
         raw_data = self._fetch_all_raw_data(force_refresh, start_date)
@@ -112,6 +123,15 @@ class UnifiedDataManager:
     def _fetch_all_raw_data(
         self, force_refresh: bool, start_date_override: Optional[str] = None
     ) -> Dict[str, pd.DataFrame]:
+        """
+
+        Args:
+          force_refresh: bool: 
+          start_date_override: Optional[str]:  (Default value = None)
+
+        Returns:
+
+        """
         self.logger.info(f"Fetching raw data (force_refresh={force_refresh})")
 
         start_date = (
@@ -176,6 +196,15 @@ class UnifiedDataManager:
         return results
 
     def _validate_raw_data(self, raw_data: Dict[str, pd.DataFrame]) -> bool:
+        """
+
+        Args:
+          raw_data: Dict[str: 
+          pd.DataFrame]: 
+
+        Returns:
+
+        """
         # CRITICAL: Stock data must exist
         if "stocks" not in raw_data or raw_data["stocks"].empty:
             self.logger.error(" Stock price data is MISSING (REQUIRED)")
@@ -201,7 +230,14 @@ class UnifiedDataManager:
     def _prepare_backtest_structure(
         self, stock_data: pd.DataFrame
     ) -> Optional[pd.DataFrame]:
-        """Converts flat stock DataFrame to MultiIndex."""
+        """Converts flat stock DataFrame to MultiIndex.
+
+        Args:
+          stock_data: pd.DataFrame: 
+
+        Returns:
+
+        """
         try:
             if (
                 "timestamp" not in stock_data.columns
@@ -248,7 +284,14 @@ class UnifiedDataManager:
     #    return filtered
 
     def _save_to_processed_cache(self, data: pd.DataFrame):
-        """Saves processed DataFrame to cache."""
+        """Saves processed DataFrame to cache.
+
+        Args:
+          data: pd.DataFrame: 
+
+        Returns:
+
+        """
         try:
             data.to_parquet(self.processed_cache_path)
             self.logger.info(

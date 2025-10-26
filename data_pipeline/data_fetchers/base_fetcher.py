@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 
 
 class BaseDataFetcher(ABC):
+    """ """
     def __init__(self, cache_dir: Path, db_config: Dict[str, Any]):
         self.cache_dir = cache_dir
         self.db_config = db_config
@@ -40,19 +41,30 @@ class BaseDataFetcher(ABC):
     @property
     @abstractmethod
     def data_type(self) -> str:
-        """Return the type of data this fetcher handles (e.g., 'prices', 'macro')."""
+        """ """
         pass
 
     @abstractmethod
     def fetch(self, **kwargs) -> pd.DataFrame:
-        """Main method to fetch data, to be implemented by subclasses."""
+        """Main method to fetch data, to be implemented by subclasses.
+
+        Args:
+          **kwargs: 
+
+        Returns:
+
+        """
         pass
 
     # NEW METHOD: Subclasses will override this to indicate if they use the database
     def _uses_database(self) -> bool:
-        """
-        Indicates whether this fetcher uses a database connection.
+        """Indicates whether this fetcher uses a database connection.
         Subclasses that need a DB should override this and return True.
+
+        Args:
+
+        Returns:
+
         """
         return False
 
@@ -69,11 +81,25 @@ class BaseDataFetcher(ABC):
     # --- Cache Methods ---
 
     def get_cache_path(self, identifier: str) -> Path:
-        """Get the cache file path for a specific identifier (e.g., a symbol)."""
+        """Get the cache file path for a specific identifier (e.g., a symbol).
+
+        Args:
+          identifier: str: 
+
+        Returns:
+
+        """
         return self.fetcher_cache_dir / f"{identifier}.parquet"
 
     def load_from_cache(self, identifier: str) -> Optional[pd.DataFrame]:
-        """Load data from cache if it exists and is not stale."""
+        """Load data from cache if it exists and is not stale.
+
+        Args:
+          identifier: str: 
+
+        Returns:
+
+        """
         cache_file = self.get_cache_path(identifier)
         if cache_file.exists():
             try:
@@ -94,7 +120,15 @@ class BaseDataFetcher(ABC):
         return None
 
     def save_to_cache(self, data: pd.DataFrame, identifier: str):
-        """Save data to a Parquet cache file."""
+        """Save data to a Parquet cache file.
+
+        Args:
+          data: pd.DataFrame: 
+          identifier: str: 
+
+        Returns:
+
+        """
         if data.empty:
             self.logger.debug(f"Data for {identifier} is empty, skipping cache save.")
             return
@@ -107,7 +141,14 @@ class BaseDataFetcher(ABC):
             self.logger.error(f"Failed to save cache for {identifier}: {e}")
 
     def validate_data(self, data: pd.DataFrame) -> bool:
-        """Default validation: checks if DataFrame is not empty."""
+        """Default validation: checks if DataFrame is not empty.
+
+        Args:
+          data: pd.DataFrame: 
+
+        Returns:
+
+        """
         if data is None or data.empty:
             return False
         return True

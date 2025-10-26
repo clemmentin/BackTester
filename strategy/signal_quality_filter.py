@@ -5,6 +5,7 @@ from strategy.contracts import RawAlphaSignal, RawAlphaSignalDict
 
 
 class SignalQualityFilter:
+    """ """
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
         quality_config = kwargs.get("signal_quality", {})
@@ -62,7 +63,15 @@ class SignalQualityFilter:
     def filter_signals(
         self, signals: RawAlphaSignalDict, regime: str = "NORMAL"
     ) -> Tuple[RawAlphaSignalDict, Dict]:
-        """Filters signals based on a series of quality checks."""
+        """Filters signals based on a series of quality checks.
+
+        Args:
+          signals: RawAlphaSignalDict: 
+          regime: str:  (Default value = "NORMAL")
+
+        Returns:
+
+        """
         if not self.enabled:
             return signals, {"filtered": 0, "total": len(signals)}
 
@@ -114,7 +123,14 @@ class SignalQualityFilter:
         return filtered_signals, filter_stats
 
     def _get_regime_thresholds(self, regime: str) -> Dict[str, float]:
-        """Get score and confidence thresholds adjusted for the current market regime."""
+        """Get score and confidence thresholds adjusted for the current market regime.
+
+        Args:
+          regime: str: 
+
+        Returns:
+
+        """
         regime_key = regime.lower()
         adjustments = self.regime_threshold_adjustments.get(
             regime_key, {"score_mult": 1.0, "conf_mult": 1.0}
@@ -129,9 +145,15 @@ class SignalQualityFilter:
     def _has_strong_component(
         self, signal: RawAlphaSignal, regime: str = "normal"
     ) -> bool:
-        """
-        Check if at least one underlying component of the signal is strong enough.
+        """Check if at least one underlying component of the signal is strong enough.
         MODIFIED: Simplified by removing weighted_evidence_fallback for single-factor sleeve context.
+
+        Args:
+          signal: RawAlphaSignal: 
+          regime: str:  (Default value = "normal")
+
+        Returns:
+
         """
         if not signal.components:
             return True
@@ -161,7 +183,14 @@ class SignalQualityFilter:
         return False
 
     def _is_outlier(self, signal: RawAlphaSignal) -> bool:
-        """Detects outlier signals that are likely erroneous (e.g., max score with min confidence)."""
+        """Detects outlier signals that are likely erroneous (e.g., max score with min confidence).
+
+        Args:
+          signal: RawAlphaSignal: 
+
+        Returns:
+
+        """
         if (
             abs(signal.score) > self.outlier_score_threshold
             and signal.confidence < self.outlier_confidence_threshold

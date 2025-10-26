@@ -9,6 +9,7 @@ from backtester.events import OrderEvent, SignalEvent
 
 
 class Portfolio:
+    """ """
     def __init__(
         self,
         events_queue,
@@ -114,9 +115,14 @@ class Portfolio:
         self.logger.info(f"  Max single position: {self.max_single_position:.1%}")
 
     def update_timeindex(self, event):
-        """
-        Update portfolio valuation at each market event
+        """Update portfolio valuation at each market event
         Pure bookkeeping - no risk decisions
+
+        Args:
+          event: 
+
+        Returns:
+
         """
         if event.type != "Market":
             return
@@ -174,6 +180,14 @@ class Portfolio:
         self.current_holdings["total"] = total_value
 
     def on_signal(self, event):
+        """
+
+        Args:
+          event: 
+
+        Returns:
+
+        """
         if event.type != "Signal":
             return
         if event.signal_type == "Long":
@@ -192,9 +206,14 @@ class Portfolio:
             )
 
     def _adjust_position_to_target_value(self, signal: SignalEvent):
-        """
-        NEW CORE METHOD: Adjusts a position to a specific target dollar value.
+        """NEW CORE METHOD: Adjusts a position to a specific target dollar value.
         This handles initial buys, increasing a position, and reducing a position.
+
+        Args:
+          signal: SignalEvent: 
+
+        Returns:
+
         """
         symbol = signal.symbol
         target_value = signal.score  # The 'score' is now the target dollar value
@@ -270,7 +289,14 @@ class Portfolio:
             )
 
     def _process_sell_signal(self, signal):
-        """Process sell signal - exit entire position"""
+        """Process sell signal - exit entire position
+
+        Args:
+          signal: 
+
+        Returns:
+
+        """
         symbol = signal.symbol
         quantity = self.current_positions.get(symbol, 0)
 
@@ -289,7 +315,14 @@ class Portfolio:
         logging.info(f"SELL ORDER: {quantity} shares of {symbol}")
 
     def on_fill(self, event):
-        """Process fill events - update positions and cash"""
+        """Process fill events - update positions and cash
+
+        Args:
+          event: 
+
+        Returns:
+
+        """
         if event.type != "Fill":
             return
 
@@ -299,15 +332,17 @@ class Portfolio:
             self._process_sell_fill(event)
 
     def _process_buy_fill(self, event):
-        """
-        Process executed buy order using Average Cost Method.
-
+        """Process executed buy order using Average Cost Method.
+        
         When adding to an existing position, the cost basis is updated to the
         weighted average of the old position and new purchase:
         New Average Cost = (Old Cost × Old Qty + New Cost × New Qty) / Total Qty
 
         Args:
-            event: FillEvent containing executed trade details
+          event: FillEvent containing executed trade details
+
+        Returns:
+
         """
         symbol = event.symbol
         quantity = event.quantity
@@ -368,16 +403,18 @@ class Portfolio:
         )
 
     def _process_sell_fill(self, event):
-        """
-        Process executed sell order using Average Cost Method.
-
+        """Process executed sell order using Average Cost Method.
+        
         PnL is calculated using the average cost basis:
         Realized PnL = (Exit Price - Average Cost) × Quantity Sold - Commission
-
+        
         For partial exits, the remaining position keeps the same average cost.
 
         Args:
-            event: FillEvent containing executed trade details
+          event: FillEvent containing executed trade details
+
+        Returns:
+
         """
         symbol = event.symbol
         quantity = event.quantity
@@ -461,7 +498,14 @@ class Portfolio:
         )
 
     def _update_trade_stats(self, pnl):
-        """Update trade statistics"""
+        """Update trade statistics
+
+        Args:
+          pnl: 
+
+        Returns:
+
+        """
         self.trade_stats["total_trades"] += 1
         self.trade_stats["total_pnl"] += pnl
 

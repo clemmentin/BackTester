@@ -9,7 +9,17 @@ from typing import Dict, List, Optional
 
 
 def create_equity_curve_dataframe(all_holdings: List[Dict]) -> pd.DataFrame:
-    """Transforms a list of holdings snapshots into a clean equity curve DataFrame."""
+    """Transforms a list of holdings snapshots into a clean equity curve DataFrame.
+
+    Args:
+      all_holdings: List[Dict]:
+      all_holdings: List[Dict]:
+      all_holdings: List[Dict]:
+      all_holdings: List[Dict]: 
+
+    Returns:
+
+    """
     df = pd.DataFrame(all_holdings)
     if "timestamp" not in df.columns:
         return pd.DataFrame()
@@ -36,7 +46,25 @@ def create_equity_curve_dataframe(all_holdings: List[Dict]) -> pd.DataFrame:
 def calculate_advanced_metrics(
     equity_curve: pd.DataFrame, initial_capital: float, risk_free_rate: float = 0.02
 ) -> Dict[str, float]:
-    """Calculates a comprehensive set of risk-adjusted performance metrics."""
+    """Calculates a comprehensive set of risk-adjusted performance metrics.
+
+    Args:
+      equity_curve: pd.DataFrame:
+      initial_capital: float:
+      risk_free_rate: float:  (Default value = 0.02)
+      equity_curve: pd.DataFrame:
+      initial_capital: float:
+      risk_free_rate: float:  (Default value = 0.02)
+      equity_curve: pd.DataFrame:
+      initial_capital: float:
+      risk_free_rate: float:  (Default value = 0.02)
+      equity_curve: pd.DataFrame: 
+      initial_capital: float: 
+      risk_free_rate: float:  (Default value = 0.02)
+
+    Returns:
+
+    """
     if equity_curve is None or equity_curve.empty or len(equity_curve) < 20:
         return {}
 
@@ -106,7 +134,17 @@ def calculate_advanced_metrics(
 
 
 def _calculate_max_drawdown_duration(drawdown_series: pd.Series) -> int:
-    """Helper function to calculate the longest drawdown period in days."""
+    """Helper function to calculate the longest drawdown period in days.
+
+    Args:
+      drawdown_series: pd.Series:
+      drawdown_series: pd.Series:
+      drawdown_series: pd.Series:
+      drawdown_series: pd.Series: 
+
+    Returns:
+
+    """
     in_dd = drawdown_series < 0
     if not in_dd.any():
         return 0
@@ -121,7 +159,17 @@ def _calculate_max_drawdown_duration(drawdown_series: pd.Series) -> int:
 
 
 def generate_monthly_returns_table(equity_curve: pd.DataFrame) -> pd.DataFrame:
-    """Generates a pivot table of monthly returns."""
+    """Generates a pivot table of monthly returns.
+
+    Args:
+      equity_curve: pd.DataFrame:
+      equity_curve: pd.DataFrame:
+      equity_curve: pd.DataFrame:
+      equity_curve: pd.DataFrame: 
+
+    Returns:
+
+    """
     if equity_curve.empty:
         return pd.DataFrame()
 
@@ -169,7 +217,17 @@ def generate_monthly_returns_table(equity_curve: pd.DataFrame) -> pd.DataFrame:
 
 
 def calculate_trade_stats_by_symbol(trades_df: pd.DataFrame) -> pd.DataFrame:
-    """Calculates detailed trade statistics per symbol, returning raw numeric data."""
+    """Calculates detailed trade statistics per symbol, returning raw numeric data.
+
+    Args:
+      trades_df: pd.DataFrame:
+      trades_df: pd.DataFrame:
+      trades_df: pd.DataFrame:
+      trades_df: pd.DataFrame: 
+
+    Returns:
+
+    """
     if trades_df is None or trades_df.empty or "pnl" not in trades_df.columns:
         return pd.DataFrame()
 
@@ -208,7 +266,25 @@ def plot_equity_curve(
     benchmark_equity: Optional[pd.DataFrame] = None,
     title: str = "Strategy Performance",
 ):
-    """Plots the equity curve and saves it to a file without showing it."""
+    """Plots the equity curve and saves it to a file without showing it.
+
+    Args:
+      equity_curve: pd.DataFrame:
+      benchmark_equity: Optional[pd.DataFrame]:  (Default value = None)
+      title: str:  (Default value = "Strategy Performance")
+      equity_curve: pd.DataFrame:
+      benchmark_equity: Optional[pd.DataFrame]:  (Default value = None)
+      title: str:  (Default value = "Strategy Performance")
+      equity_curve: pd.DataFrame:
+      benchmark_equity: Optional[pd.DataFrame]:  (Default value = None)
+      title: str:  (Default value = "Strategy Performance")
+      equity_curve: pd.DataFrame: 
+      benchmark_equity: Optional[pd.DataFrame]:  (Default value = None)
+      title: str:  (Default value = "Strategy Performance")
+
+    Returns:
+
+    """
     plt.style.use("seaborn-v0_8-darkgrid")
     fig, ax = plt.subplots(figsize=(15, 8))
 
@@ -254,7 +330,25 @@ def create_interactive_dashboard(
     benchmark_equity: Optional[pd.DataFrame] = None,
     trades_df: Optional[pd.DataFrame] = None,
 ):
-    """Generates an interactive Plotly dashboard and saves it as an HTML file."""
+    """Generates an interactive Plotly dashboard and saves it as an HTML file.
+
+    Args:
+      equity_curve: pd.DataFrame:
+      benchmark_equity: Optional[pd.DataFrame]:  (Default value = None)
+      trades_df: Optional[pd.DataFrame]:  (Default value = None)
+      equity_curve: pd.DataFrame:
+      benchmark_equity: Optional[pd.DataFrame]:  (Default value = None)
+      trades_df: Optional[pd.DataFrame]:  (Default value = None)
+      equity_curve: pd.DataFrame:
+      benchmark_equity: Optional[pd.DataFrame]:  (Default value = None)
+      trades_df: Optional[pd.DataFrame]:  (Default value = None)
+      equity_curve: pd.DataFrame: 
+      benchmark_equity: Optional[pd.DataFrame]:  (Default value = None)
+      trades_df: Optional[pd.DataFrame]:  (Default value = None)
+
+    Returns:
+
+    """
     fig = make_subplots(
         rows=4,
         cols=1,
@@ -350,7 +444,21 @@ def create_interactive_dashboard(
 
 
 def analyze_market_phases(equity_curve: pd.DataFrame, benchmark_equity: pd.DataFrame):
-    """Prints a comparative performance analysis across different market phases."""
+    """Prints a comparative performance analysis across different market phases.
+
+    Args:
+      equity_curve: pd.DataFrame:
+      benchmark_equity: pd.DataFrame:
+      equity_curve: pd.DataFrame:
+      benchmark_equity: pd.DataFrame:
+      equity_curve: pd.DataFrame:
+      benchmark_equity: pd.DataFrame:
+      equity_curve: pd.DataFrame: 
+      benchmark_equity: pd.DataFrame: 
+
+    Returns:
+
+    """
     print("\n=== MARKET PHASE ANALYSIS ===")
     phases = {
         "COVID Crash & Recovery": ("2020-01-01", "2021-12-31"),
@@ -377,7 +485,17 @@ def analyze_market_phases(equity_curve: pd.DataFrame, benchmark_equity: pd.DataF
 
 
 def analyze_filter_effectiveness(diagnostics_log: List[Dict]):
-    """Analyzes and prints a summary of signal filter effectiveness."""
+    """Analyzes and prints a summary of signal filter effectiveness.
+
+    Args:
+      diagnostics_log: List[Dict]:
+      diagnostics_log: List[Dict]:
+      diagnostics_log: List[Dict]:
+      diagnostics_log: List[Dict]: 
+
+    Returns:
+
+    """
     if not diagnostics_log:
         print("No diagnostic data for filter effectiveness analysis.")
         return
@@ -408,7 +526,17 @@ def analyze_filter_effectiveness(diagnostics_log: List[Dict]):
 
 
 def plot_signal_stability(diagnostics_log: List[Dict]):
-    """Plots raw vs. filtered signal counts over time and saves the figure."""
+    """Plots raw vs. filtered signal counts over time and saves the figure.
+
+    Args:
+      diagnostics_log: List[Dict]:
+      diagnostics_log: List[Dict]:
+      diagnostics_log: List[Dict]:
+      diagnostics_log: List[Dict]: 
+
+    Returns:
+
+    """
     if not diagnostics_log:
         return
     df = pd.DataFrame(diagnostics_log)
@@ -447,7 +575,21 @@ def plot_signal_stability(diagnostics_log: List[Dict]):
 
 
 def plot_position_stability(diagnostics_log: List[Dict], min_positions_target: int = 5):
-    """Plots the number of positions held over time and saves the figure."""
+    """Plots the number of positions held over time and saves the figure.
+
+    Args:
+      diagnostics_log: List[Dict]:
+      min_positions_target: int:  (Default value = 5)
+      diagnostics_log: List[Dict]:
+      min_positions_target: int:  (Default value = 5)
+      diagnostics_log: List[Dict]:
+      min_positions_target: int:  (Default value = 5)
+      diagnostics_log: List[Dict]: 
+      min_positions_target: int:  (Default value = 5)
+
+    Returns:
+
+    """
     if not diagnostics_log:
         return
     df = pd.DataFrame(diagnostics_log)
@@ -484,7 +626,17 @@ def plot_position_stability(diagnostics_log: List[Dict], min_positions_target: i
 
 
 def plot_capital_utilization(diagnostics_log: List[Dict]):
-    """Plots target vs. actual capital utilization over time and saves the figure."""
+    """Plots target vs. actual capital utilization over time and saves the figure.
+
+    Args:
+      diagnostics_log: List[Dict]:
+      diagnostics_log: List[Dict]:
+      diagnostics_log: List[Dict]:
+      diagnostics_log: List[Dict]: 
+
+    Returns:
+
+    """
     if not diagnostics_log:
         return
     df = pd.DataFrame(diagnostics_log)

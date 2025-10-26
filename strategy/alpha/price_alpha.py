@@ -6,6 +6,7 @@ from strategy.contracts import RawAlphaSignal
 
 
 class PriceAlphaModule:
+    """ """
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
         price_params = kwargs.get("price_alpha_params", {})
@@ -104,6 +105,18 @@ class PriceAlphaModule:
         timestamp: pd.Timestamp,
         market_regime: str = "NORMAL",
     ) -> Dict[str, RawAlphaSignal]:
+        """
+
+        Args:
+          prices: pd.DataFrame: 
+          opens: pd.DataFrame: 
+          volumes: pd.DataFrame: 
+          timestamp: pd.Timestamp: 
+          market_regime: str:  (Default value = "NORMAL")
+
+        Returns:
+
+        """
         if market_regime.upper() in ["CRISIS", "VOLATILE"]:
             self.logger.info(
                 f"PriceAlphaModule disabled in {market_regime.upper()} regime."
@@ -159,6 +172,16 @@ class PriceAlphaModule:
     def _calculate_mean_reversion_score(
         self, prices: pd.DataFrame, volumes: pd.DataFrame, df: pd.DataFrame
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          prices: pd.DataFrame: 
+          volumes: pd.DataFrame: 
+          df: pd.DataFrame: 
+
+        Returns:
+
+        """
         delta = prices.diff()
         gain = delta.where(delta > 0, 0.0)
         loss = -delta.where(delta < 0, 0.0)
@@ -282,12 +305,29 @@ class PriceAlphaModule:
         return df
 
     def _generate_composite_score(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+
+        Args:
+          df: pd.DataFrame: 
+
+        Returns:
+
+        """
         df["score"] = df["mean_reversion_score"].clip(-1.0, 1.0)
         return df
 
     def _calculate_confidence(
         self, df: pd.DataFrame, volumes: pd.DataFrame
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          df: pd.DataFrame: 
+          volumes: pd.DataFrame: 
+
+        Returns:
+
+        """
         if self.enable_high_certainty_mode:
             base_confidence = np.where(
                 df["score"] != 0,

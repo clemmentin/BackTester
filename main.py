@@ -1,5 +1,5 @@
 # main.py
-# !/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Quantitative Strategy Backtesting System - Main Execution Engine
 This is the primary entry point for running a performance backtest.
@@ -16,10 +16,17 @@ from typing import Optional
 
 import pandas as pd
 
+# Add project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
+# ============================================================================
+# CONFIGURATION IMPORT - SIMPLIFIED
+# ============================================================================
+# Thanks to the new __init__.py, we only need a single, clean import.
 import config
-import config.general_config as general_config
+
+# ============================================================================
+
 from backtester.optimization import (
     run_single_simple_backtest,
     run_walk_forward_optimization,
@@ -28,26 +35,28 @@ from data_pipeline.unified_data_manager import UnifiedDataManager
 
 
 def setup_logging():
-    """Configure logging for the entire application."""
+    """Configure logging for the application."""
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     logging.basicConfig(
         level=logging.INFO,
         format=log_format,
         handlers=[
-            logging.FileHandler("main_execution.log", mode="w"),
-            logging.StreamHandler(),
+            logging.FileHandler("main_execution.log", mode="w"),  # Log to file
+            logging.StreamHandler(),  # Log to console
         ],
     )
-    # Silence overly verbose third-party libraries
+    # Silence verbose third-party libraries
     for logger_name in ["matplotlib", "yfinance", "urllib3", "fredapi"]:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 def print_configuration_summary():
-    """Prints a clear summary of the current backtest configuration."""
+    """Prints a summary of the current backtest configuration."""
     print("\n" + "=" * 80)
     print(" " * 25 + "BACKTEST CONFIGURATION SUMMARY")
     print("=" * 80)
+
+    # --- CORRECTED: Access all variables directly from the 'config' package ---
     run_mode = "Walk-Forward Optimization" if config.WFO_ENABLED else "Single Backtest"
     print(f"RUN MODE        : {run_mode}")
     print(f"STRATEGY        : {config.CURRENT_STRATEGY}")
@@ -57,83 +66,90 @@ def print_configuration_summary():
     )
 
     if config.CURRENT_STRATEGY == "HYBRID_DUAL_ALPHA":
+        # Get strategy params directly from the config object
         params = config.HYBRID_DUAL_PARAMS
         engine_params = params.get("alpha_engine", {})
-        ic_enabled = engine_params.get("ic_enabled", True)
+        base_weights = engine_params.get("base_weights", {})
+        ic_monitoring_params = params.get("ic_monitoring", {})
+        ic_enabled = ic_monitoring_params.get("enabled", False)
 
         print("\n--- Alpha Engine  ---")
-        print(f"  Price Weight            : {engine_params.get('price_weight', 0):.0%}")
-        print(
-            f"  Reversal Weight         : {engine_params.get('reversal_weight', 0):.0%}"
-        )
-        print(
-            f"  Momentum Weight         : {engine_params.get('momentum_weight', 0):.0%}"
-        )
-        print(
-            f"  Liquidity Weight        : {engine_params.get('liquidity_weight', 0):.0%}"
-        )
+        # CORRECTED: Use the actual keys from the 'base_weights' dictionary
+        print(f"  Price Weight            : {base_weights.get('price', 0):.0%}")
+        print(f"  Reversal Weight         : {base_weights.get('reversal', 0):.0%}")
+        print(f"  Liquidity Weight        : {base_weights.get('liquidity', 0):.0%}")
+        # Note: 'momentum' is not a base weight in this config, so it will show 0%
+        print(f"  Momentum Weight         : {base_weights.get('momentum', 0):.0%}")
         print(f"  Dynamic IC Weighting    : {'Enabled' if ic_enabled else 'Disabled'}")
 
     print("\n--- Risk & Position Management ---")
 
-    pos_mgmt = config.TRADING_PARAMS.get("position_management", {})
+    # CORRECTED: Access RISK_PARAMS directly from config
+    pos_mgmt = config.RISK_PARAMS.get("position_management", {})
     min_pos = pos_mgmt.get("min_total_positions", "N/A")
     max_pos = pos_mgmt.get("max_total_positions", "N/A")
 
-    exposure_mgmt = config.RISK_PARAMS.get("exposure_management", {})
-    min_exp = exposure_mgmt.get("min_exposure_pct", "N/A")
-    max_exp = exposure_mgmt.get("max_exposure_pct", "N/A")
+    portfolio_limits = config.RISK_PARAMS.get("portfolio_limits", {})
+    min_weight = portfolio_limits.get("min_single_position", "N/A")
+    max_weight = portfolio_limits.get("max_single_position", "N/A")
 
-    print(f"  Position Count Range    : {min_pos} to {max_pos} positions (dynamic)")
-    if isinstance(min_exp, float) and isinstance(max_exp, float):
-        print(f"  Portfolio Exposure Range: {min_exp:.0%} to {max_exp:.0%} (dynamic)")
+    print(f"  Position Count Range    : {min_pos} to {max_pos} positions")
+    # CORRECTED: Changed label and keys to reflect the actual config values
+    if isinstance(min_weight, float) and isinstance(max_weight, float):
+        print(f"  Single Position Weight  : {min_weight:.0%} to {max_weight:.0%}")
     else:
-        print(f"  Portfolio Exposure Range: N/A")
+        print(f"  Single Position Weight  : N/A")
 
     print(
         f"  Max Drawdown Threshold  : {config.RISK_PARAMS['drawdown_control']['max_drawdown_threshold']:.0%}"
     )
+    # CORRECTED: This value is in HYBRID_DUAL_PARAMS, not a non-existent 'params' object
     print(
-        f"  Rebalance Frequency     : {config.TRADING_PARAMS['strategy_execution']['rebalance_frequency']}"
+        f"  Rebalance Frequency     : {config.HYBRID_DUAL_PARAMS.get('rebalance_frequency', 'N/A').capitalize()}"
     )
     print("=" * 80)
 
 
 def run_data_pipeline(force_refresh: bool = False) -> Optional[pd.DataFrame]:
-    """Initializes the data manager and builds the complete feature set."""
+    """
+    Initialize data manager and build the feature set.
+    An exception during this process will terminate the program.
+    """
     print("\n[PHASE 1] Data Pipeline")
     print("-" * 80)
-    try:
-        manager = UnifiedDataManager()
-        all_data = manager.build_feature_set(force_refresh=force_refresh)
 
-        if all_data is None or all_data.empty:
-            raise ValueError("Data pipeline returned an empty or None dataset.")
+    manager = UnifiedDataManager()
+    all_data = manager.build_feature_set(force_refresh=force_refresh)
 
-        date_range = all_data.index.get_level_values("timestamp")
-        print("Data pipeline successful.")
-        print(f"  - Total records loaded: {len(all_data):,}")
-        print(f"  - Data range: {date_range.min().date()} to {date_range.max().date()}")
-        return all_data
-    except Exception as e:
-        logging.error(f"Data pipeline failed catastrophically: {e}", exc_info=True)
+    if all_data is None or all_data.empty:
+        logging.error("Data pipeline returned an empty or None dataset.")
         return None
+
+    date_range = all_data.index.get_level_values("timestamp")
+    print("Data pipeline successful.")
+    print(f"  - Total records loaded: {len(all_data):,}")
+    print(f"  - Data range: {date_range.min().date()} to {date_range.max().date()}")
+    return all_data
 
 
 def run_full_backtest(all_data: pd.DataFrame):
-    """Orchestrates the backtest and subsequent performance analysis."""
+    """
+    Orchestrate the backtest and performance analysis.
+    """
     print("\n[PHASE 2] Backtest Execution")
     print("-" * 80)
     manage_ml_data_file(mode="archive")
+
+    # CORRECTED: Use config.BACKTEST_START_DATE directly
     if config.WFO_ENABLED:
         logging.info("WFO mode enabled. Starting Walk-Forward Optimization...")
         backtest_results = run_walk_forward_optimization(
-            all_data, start_date=general_config.BACKTEST_START_DATE
+            all_data, start_date=config.BACKTEST_START_DATE
         )
     else:
         logging.info("Single backtest mode enabled.")
         backtest_results = run_single_simple_backtest(
-            all_data, start_date=general_config.BACKTEST_START_DATE
+            all_data, start_date=config.BACKTEST_START_DATE
         )
 
     if not backtest_results or backtest_results.get("holdings", pd.DataFrame()).empty:
@@ -144,14 +160,15 @@ def run_full_backtest(all_data: pd.DataFrame):
 
 
 def manage_ml_data_file(mode="archive"):
+    """
+    Manages the ML training data file.
+    """
     filepath = "./data/ml_training_data.csv"
     if os.path.exists(filepath):
         if mode == "archive":
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             archive_path = f"./data/archive/ml_training_data_{timestamp}.csv"
-
             os.makedirs("./data/archive", exist_ok=True)
-
             os.rename(filepath, archive_path)
             print(f"Archived existing ML data file to: {archive_path}")
         elif mode == "delete":
@@ -160,7 +177,7 @@ def manage_ml_data_file(mode="archive"):
 
 
 def main() -> int:
-    """Main execution function to orchestrate the entire process."""
+    """Main execution function without try/except blocks."""
     start_time_global = time.time()
 
     parser = argparse.ArgumentParser(
@@ -185,30 +202,26 @@ def main() -> int:
     if profiler:
         profiler.enable()
 
-    try:
-        all_data = run_data_pipeline(force_refresh=args.force_refresh)
-        if all_data is None:
-            return 1
-        run_full_backtest(all_data)
-
-    except KeyboardInterrupt:
-        print("\n\nExecution interrupted by user.")
-        return 130
-    except Exception:
-        logging.critical("A fatal error occurred during main execution.", exc_info=True)
+    # Phase 1: Data Pipeline
+    all_data = run_data_pipeline(force_refresh=args.force_refresh)
+    if all_data is None:
+        logging.critical("Data pipeline failed. Aborting execution.")
         return 1
-    finally:
-        if profiler:
-            profiler.disable()
-            stats = pstats.Stats(profiler).sort_stats(pstats.SortKey.CUMULATIVE)
-            print("\n" + "=" * 80 + "\nPERFORMANCE PROFILE\n" + "=" * 80)
-            stats.print_stats(30)
 
-        total_duration = time.time() - start_time_global
-        print("\n" + "=" * 80 + "\nEXECUTION SUMMARY\n" + "=" * 80)
-        print(f"Total Run Time: {total_duration:.2f} seconds")
-        print(f"End Time: {datetime.now():%Y-%m-%d %H:%M:%S}")
-        print("=" * 80)
+    # Phase 2: Backtest
+    run_full_backtest(all_data)
+
+    if profiler:
+        profiler.disable()
+        stats = pstats.Stats(profiler).sort_stats(pstats.SortKey.CUMULATIVE)
+        print("\n" + "=" * 80 + "\nPERFORMANCE PROFILE\n" + "=" * 80)
+        stats.print_stats(30)
+
+    total_duration = time.time() - start_time_global
+    print("\n" + "=" * 80 + "\nEXECUTION SUMMARY\n" + "=" * 80)
+    print(f"Total Run Time: {total_duration:.2f} seconds")
+    print(f"End Time: {datetime.now():%Y-%m-%d %H:%M%S}")
+    print("=" * 80)
 
     return 0
 

@@ -12,6 +12,7 @@ import numpy as np
 
 
 class DecisionEngine:
+    """ """
     def __init__(
         self,
         initial_capital: float,
@@ -62,6 +63,17 @@ class DecisionEngine:
         market_data_for_day: pd.DataFrame,
         current_positions: Dict,
     ) -> Tuple[Dict, Dict]:
+        """
+
+        Args:
+          timestamp: pd.Timestamp: 
+          portfolio_value: float: 
+          market_data_for_day: pd.DataFrame: 
+          current_positions: Dict: 
+
+        Returns:
+
+        """
         diagnostics = {}
 
         # --- 1. Detect Market State ---
@@ -134,8 +146,14 @@ class DecisionEngine:
     def _calculate_target_positions(
         self, signals: Dict, total_risk_budget: float
     ) -> Dict:
-        """
-        Calculates the target dollar value for each position based on signal strength.
+        """Calculates the target dollar value for each position based on signal strength.
+
+        Args:
+          signals: Dict: 
+          total_risk_budget: float: 
+
+        Returns:
+
         """
         if not signals:
             return {}
@@ -174,10 +192,15 @@ class DecisionEngine:
     def _combine_and_filter_signals(
         self, signals_by_source: Dict
     ) -> list[RawAlphaSignal]:
-        """
-        A placeholder for logic that combines signals from various alpha sources.
+        """A placeholder for logic that combines signals from various alpha sources.
         For this architecture, we assume a simple union of all generated signals.
         In a more complex system, this could involve weighting, conflict resolution, etc.
+
+        Args:
+          signals_by_source: Dict: 
+
+        Returns:
+
         """
         all_signals = []
         for source, signals in signals_by_source.items():
@@ -194,9 +217,16 @@ class DecisionEngine:
         risk_budget: "RiskBudget",
         market_state: "MarketState",
     ) -> Dict[str, float]:
-        """
-        Constructs a target portfolio from signals and a risk budget.
+        """Constructs a target portfolio from signals and a risk budget.
         This simplified version uses a score-weighted allocation.
+
+        Args:
+          signals: list[RawAlphaSignal]: 
+          risk_budget: "RiskBudget": 
+          market_state: "MarketState": 
+
+        Returns:
+
         """
         if not signals:
             return {}
@@ -229,8 +259,16 @@ class DecisionEngine:
         current_position_values: Dict[str, float],
         available_cash: float,
     ) -> Dict[str, float]:
-        """
-        Adjusts the ideal target portfolio to ensure new buys do not exceed available cash.
+        """Adjusts the ideal target portfolio to ensure new buys do not exceed available cash.
+
+        Args:
+          ideal_target_portfolio: Dict[str: 
+          float]: 
+          current_position_values: Dict[str: 
+          available_cash: float: 
+
+        Returns:
+
         """
         cash_needed = 0
         # Calculate the total cash required for all new buys and position increases

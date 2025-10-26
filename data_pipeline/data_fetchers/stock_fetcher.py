@@ -11,6 +11,7 @@ from .base_fetcher import BaseDataFetcher
 
 
 class StockDataFetcher(BaseDataFetcher):
+    """ """
     def __init__(self, cache_dir: Path, db_config: Dict[str, Any]):
         super().__init__(cache_dir, db_config)
         self.logger = logging.getLogger(__name__)
@@ -18,12 +19,22 @@ class StockDataFetcher(BaseDataFetcher):
 
     @property
     def data_type(self) -> str:
+        """ """
         return "prices"
 
     def _uses_database(self) -> bool:
+        """ """
         return True
 
     def _get_latest_date_in_db(self, symbol: str) -> Optional[datetime]:
+        """
+
+        Args:
+          symbol: str: 
+
+        Returns:
+
+        """
         if not self.engine:
             return None
         try:
@@ -41,6 +52,15 @@ class StockDataFetcher(BaseDataFetcher):
             return None
 
     def _save_to_database(self, data: pd.DataFrame, symbol: str):
+        """
+
+        Args:
+          data: pd.DataFrame: 
+          symbol: str: 
+
+        Returns:
+
+        """
         if not self.engine or data.empty:
             return
         try:
@@ -85,6 +105,16 @@ class StockDataFetcher(BaseDataFetcher):
     def _load_from_database(
         self, symbol: str, start_date: str, end_date: str
     ) -> Optional[pd.DataFrame]:
+        """
+
+        Args:
+          symbol: str: 
+          start_date: str: 
+          end_date: str: 
+
+        Returns:
+
+        """
         if not self.engine:
             return None
         try:
@@ -112,6 +142,17 @@ class StockDataFetcher(BaseDataFetcher):
         end_date: str,
         force_refresh: bool = False,
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          symbols: List[str]: 
+          start_date: str: 
+          end_date: str: 
+          force_refresh: bool:  (Default value = False)
+
+        Returns:
+
+        """
         all_data = []
         for symbol in symbols:
             self.logger.info(f"Processing {symbol}...")
@@ -153,7 +194,16 @@ class StockDataFetcher(BaseDataFetcher):
     def _download_and_process(
         self, symbol: str, start_date: str, end_date: str
     ) -> Optional[pd.DataFrame]:
-        """Downloads and standardizes data from yfinance, ensuring end_date is inclusive."""
+        """Downloads and standardizes data from yfinance, ensuring end_date is inclusive.
+
+        Args:
+          symbol: str: 
+          start_date: str: 
+          end_date: str: 
+
+        Returns:
+
+        """
         try:
             end_date_dt = pd.to_datetime(end_date)
             end_date_for_api = (end_date_dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
@@ -215,4 +265,12 @@ class StockDataFetcher(BaseDataFetcher):
             return None
 
     def validate_data(self, data: pd.DataFrame) -> bool:
+        """
+
+        Args:
+          data: pd.DataFrame: 
+
+        Returns:
+
+        """
         return data is not None and not data.empty and "symbol" in data.columns

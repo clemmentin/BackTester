@@ -23,9 +23,13 @@ from analysis.performance import (
 
 
 def load_backtest_results():
-    """
-    Loads backtest artifacts. In a real scenario, this would read files.
+    """Loads backtest artifacts. In a real scenario, this would read files.
     Returns a dictionary of DataFrames and other data structures.
+
+    Args:
+
+    Returns:
+
     """
     # Placeholder: In a real implementation, you would load data from files,
     # for example, equity_curve_df = pd.read_csv('equity_curve.csv')
@@ -40,6 +44,7 @@ def load_backtest_results():
 
 
 def main():
+    """ """
     # --- Page Configuration ---
     st.set_page_config(
         page_title="Quantitative Strategy Dashboard",

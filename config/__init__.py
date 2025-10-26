@@ -27,6 +27,16 @@ class ConfigRegistry:
 
     @staticmethod
     def get_strategy_param(section: str, key: str = None, default=None):
+        """
+
+        Args:
+          section: str: 
+          key: str:  (Default value = None)
+          default:  (Default value = None)
+
+        Returns:
+
+        """
         strategy_params = get_current_strategy_params()
         if section not in strategy_params:
             return default if key else {}
@@ -37,6 +47,17 @@ class ConfigRegistry:
 
     @staticmethod
     def get_trading_param(category: str, section: str = None, key: str = None, default=None):
+        """
+
+        Args:
+          category: str: 
+          section: str:  (Default value = None)
+          key: str:  (Default value = None)
+          default:  (Default value = None)
+
+        Returns:
+
+        """
         config_map = {"RISK_PARAMS": RISK_PARAMS, "TRADING_PARAMS": TRADING_PARAMS}
         if category not in config_map:
             return default
@@ -52,6 +73,17 @@ class ConfigRegistry:
 
     @staticmethod
     def get_param_with_override(kwargs: dict, section: str, key: str, default):
+        """
+
+        Args:
+          kwargs: dict: 
+          section: str: 
+          key: str: 
+          default: 
+
+        Returns:
+
+        """
         if key in kwargs:
             return kwargs[key]
         if section in kwargs:

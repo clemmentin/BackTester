@@ -6,6 +6,7 @@ from strategy.contracts import RawAlphaSignal
 
 
 class LiquidityAlphaModule:
+    """ """
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
         liquidity_params = kwargs.get("liquidity_alpha_params", {})
@@ -99,6 +100,17 @@ class LiquidityAlphaModule:
         timestamp: pd.Timestamp,
         market_regime: str = "NORMAL",
     ) -> Dict[str, RawAlphaSignal]:
+        """
+
+        Args:
+          prices: pd.DataFrame: 
+          volumes: pd.DataFrame: 
+          timestamp: pd.Timestamp: 
+          market_regime: str:  (Default value = "NORMAL")
+
+        Returns:
+
+        """
         if prices.empty or volumes.empty or timestamp not in prices.index:
             return {}
 
@@ -168,6 +180,16 @@ class LiquidityAlphaModule:
     def _calculate_volume_price_synergy(
         self, price_slice: pd.DataFrame, volume_slice: pd.DataFrame, df: pd.DataFrame
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          price_slice: pd.DataFrame: 
+          volume_slice: pd.DataFrame: 
+          df: pd.DataFrame: 
+
+        Returns:
+
+        """
         price_changes = price_slice.pct_change().iloc[-self.volume_lookback :]
         volumes_in_period = volume_slice.iloc[-self.volume_lookback :]
         up_mask = price_changes > 0
@@ -180,6 +202,16 @@ class LiquidityAlphaModule:
     def _calculate_amihud_liquidity(
         self, price_slice: pd.DataFrame, volume_slice: pd.DataFrame, df: pd.DataFrame
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          price_slice: pd.DataFrame: 
+          volume_slice: pd.DataFrame: 
+          df: pd.DataFrame: 
+
+        Returns:
+
+        """
         returns = price_slice.pct_change().abs()
         dollar_volumes = price_slice * volume_slice
         amihud_illiquidity = (
@@ -194,6 +226,15 @@ class LiquidityAlphaModule:
     def _generate_composite_score(
         self, df: pd.DataFrame, market_regime: str
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          df: pd.DataFrame: 
+          market_regime: str: 
+
+        Returns:
+
+        """
         if "liquidity_percentile" not in df.columns:
             df["score"] = 0.0
             df["composite_score"] = 0.0
@@ -225,6 +266,14 @@ class LiquidityAlphaModule:
         return df
 
     def _calculate_confidence(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+
+        Args:
+          df: pd.DataFrame: 
+
+        Returns:
+
+        """
         if "liquidity_percentile" not in df.columns:
             df["confidence"] = 0.0
             return df

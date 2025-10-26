@@ -13,6 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 def _calculate_essential_features_for_group(group: pd.DataFrame) -> pd.DataFrame:
+    """
+
+    Args:
+      group: pd.DataFrame: 
+
+    Returns:
+
+    """
     group = group.sort_index()
 
     close = group["close"].astype(float)
@@ -50,6 +58,7 @@ def _calculate_essential_features_for_group(group: pd.DataFrame) -> pd.DataFrame
 
 
 class TechnicalIndicatorCalculator:
+    """ """
     def __init__(self, config: Dict = None):
         self.config = config or {}
         self.logger = logging.getLogger(__name__)
@@ -57,6 +66,15 @@ class TechnicalIndicatorCalculator:
     def calculate_all_indicators(
         self, price_data: pd.DataFrame, macro_data: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          price_data: pd.DataFrame: 
+          macro_data: Optional[pd.DataFrame]:  (Default value = None)
+
+        Returns:
+
+        """
         if not isinstance(price_data.index, pd.MultiIndex):
             self.logger.error("Price data must have MultiIndex ('timestamp', 'symbol')")
             return price_data
@@ -90,6 +108,14 @@ class TechnicalIndicatorCalculator:
             return price_data
 
     def _calculate_price_features(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+
+        Args:
+          data: pd.DataFrame: 
+
+        Returns:
+
+        """
         self.logger.info("Calculating essential price features...")
 
         data = data.sort_index()
@@ -116,8 +142,13 @@ class TechnicalIndicatorCalculator:
         return result_data
 
     def _calculate_volatility_measures(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Calculate volatility (REQUIRED for Price factor's low-vol sub-factor).
+        """Calculate volatility (REQUIRED for Price factor's low-vol sub-factor).
+
+        Args:
+          data: pd.DataFrame: 
+
+        Returns:
+
         """
         self.logger.info("Calculating volatility measures (required for Price factor)")
 
@@ -149,6 +180,15 @@ class TechnicalIndicatorCalculator:
     def _merge_macro_features(
         self, price_data: pd.DataFrame, macro_data: pd.DataFrame
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          price_data: pd.DataFrame: 
+          macro_data: pd.DataFrame: 
+
+        Returns:
+
+        """
         self.logger.info("Merging macro features (optional for regime enhancement)")
 
         # Apply publication delays
@@ -198,7 +238,14 @@ class TechnicalIndicatorCalculator:
         return combined
 
     def _apply_macro_delays(self, macro_data: pd.DataFrame) -> pd.DataFrame:
-        """Apply realistic publication delays to macro indicators."""
+        """Apply realistic publication delays to macro indicators.
+
+        Args:
+          macro_data: pd.DataFrame: 
+
+        Returns:
+
+        """
         delays = {
             "CPIAUCSL": 15,  # CPI: ~2 weeks after month end
             "UNRATE": 5,  # Unemployment: first Friday of month
@@ -227,6 +274,16 @@ def prepare_features_for_backtest(
     macro_data: Optional[pd.DataFrame] = None,
     config: Dict = None,
 ) -> pd.DataFrame:
+    """
+
+    Args:
+      price_data: pd.DataFrame: 
+      macro_data: Optional[pd.DataFrame]:  (Default value = None)
+      config: Dict:  (Default value = None)
+
+    Returns:
+
+    """
     calculator = TechnicalIndicatorCalculator(config)
     result = calculator.calculate_all_indicators(price_data, macro_data)
 

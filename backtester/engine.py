@@ -13,6 +13,7 @@ from analysis.performance import create_equity_curve_dataframe
 
 
 class BacktestEngine:
+    """ """
     def __init__(
         self,
         symbol_list,
@@ -99,6 +100,7 @@ class BacktestEngine:
         )
 
     def run(self):
+        """ """
         logging.info("Starting backtest with DecisionEngine...")
         event_counts = {"Market": 0, "Signal": 0, "Order": 0, "Fill": 0}
         warmup_event_count = 0
@@ -215,6 +217,14 @@ class BacktestEngine:
         logging.info(f"Final value: ${final_value:,.2f} (Return: {total_return:.2f}%)")
 
     def _should_rebalance(self, current_date) -> bool:
+        """
+
+        Args:
+          current_date: 
+
+        Returns:
+
+        """
         if self.last_rebalance_date is None:
             return True
         days_since = (current_date - self.last_rebalance_date).days
@@ -230,7 +240,15 @@ class BacktestEngine:
             return days_since >= 7
 
     def _calculate_dynamic_stops(self, final_signals, market_data_for_day):
-        """Calculates stop loss percentage based on E[Loss] and ATR."""
+        """Calculates stop loss percentage based on E[Loss] and ATR.
+
+        Args:
+          final_signals: 
+          market_data_for_day: 
+
+        Returns:
+
+        """
         if not self.dyn_stop_enabled:
             return {}
 
@@ -266,6 +284,15 @@ class BacktestEngine:
         return stop_map
 
     def _execute_warmup_update(self, timestamp, market_data_for_day):
+        """
+
+        Args:
+          timestamp: 
+          market_data_for_day: 
+
+        Returns:
+
+        """
         logging.debug(f"WARMUP: Updating model states at {timestamp.date()}")
 
         current_prices = market_data_for_day["close"].to_dict()
@@ -290,6 +317,15 @@ class BacktestEngine:
             logging.warning(f"Warmup pipeline update failed at {timestamp.date()}: {e}")
 
     def _execute_rebalance(self, timestamp, market_data_for_day):
+        """
+
+        Args:
+          timestamp: 
+          market_data_for_day: 
+
+        Returns:
+
+        """
         logging.info(f"\n{'=' * 60}")
         logging.info(f"REBALANCING at {timestamp.date()}")
         logging.info(f"{'=' * 60}")
@@ -355,6 +391,18 @@ class BacktestEngine:
         )
 
     def _generate_signals_from_targets(self, timestamp, target_portfolio_values: dict):
+        """
+
+        Args:
+          timestamp: 
+          target_portfolio_values: dict:
+          target_portfolio_values: dict:
+          target_portfolio_values: dict:
+          target_portfolio_values: dict: 
+
+        Returns:
+
+        """
         current_values = self.portfolio.get_current_position_values()
         all_symbols = set(current_values.keys()) | set(target_portfolio_values.keys())
 
@@ -378,6 +426,7 @@ class BacktestEngine:
                 self.events.put(signal)
 
     def _get_current_position_weights(self) -> dict:
+        """ """
         portfolio_value = self.portfolio.current_holdings["total"]
         if portfolio_value <= 0:
             return {}
@@ -389,6 +438,7 @@ class BacktestEngine:
         return weights
 
     def get_results(self):
+        """ """
         data_handler = self.data_handler
 
         processed_holdings = create_equity_curve_dataframe(self.portfolio.all_holdings)
@@ -429,6 +479,17 @@ class BacktestEngine:
         }
 
     def _convert_fundamental_data(self, individual_data: pd.DataFrame) -> dict:
+        """
+
+        Args:
+          individual_data: pd.DataFrame:
+          individual_data: pd.DataFrame:
+          individual_data: pd.DataFrame:
+          individual_data: pd.DataFrame: 
+
+        Returns:
+
+        """
         fundamental_dict = {}
         for _, row in individual_data.iterrows():
             symbol = row["symbol"]

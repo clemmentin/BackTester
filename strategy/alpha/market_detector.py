@@ -15,6 +15,8 @@ import faiss
 
 
 class MarketRegime(Enum):
+    """ """
+
     STRONG_BULL = "strong_bull"
     BULL = "bull"
     NORMAL = "normal"
@@ -25,6 +27,8 @@ class MarketRegime(Enum):
 
 
 class MacroRegime(Enum):
+    """ """
+
     OFFENSE = "offense"
     DEFENSE = "defense"
     SIDEWAYS = "sideways"
@@ -32,6 +36,8 @@ class MacroRegime(Enum):
 
 @dataclass
 class MarketState:
+    """ """
+
     regime: MarketRegime
     macro_regime: MacroRegime
     confidence: float
@@ -49,6 +55,8 @@ class MarketState:
 
 
 class MacroEnhancer:
+    """ """
+
     def __init__(self, config_params: Dict):
         self.logger = logging.getLogger(__name__)
         self.enabled = config_params.get("enable_macro_enhancement", False)
@@ -62,6 +70,15 @@ class MacroEnhancer:
     def analyze_macro_conditions(
         self, macro_data: Optional[pd.DataFrame], timestamp: pd.Timestamp
     ) -> Dict[str, float]:
+        """
+
+        Args:
+          macro_data: Optional[pd.DataFrame]:
+          timestamp: pd.Timestamp:
+
+        Returns:
+
+        """
         if not self.enabled or macro_data is None or macro_data.empty:
             return self._default_signals()
         try:
@@ -133,6 +150,7 @@ class MacroEnhancer:
             return self._default_signals()
 
     def _default_signals(self) -> Dict[str, float]:
+        """ """
         return {
             "recession_risk": 0.0,
             "policy_tightening_risk": 0.0,
@@ -142,6 +160,8 @@ class MacroEnhancer:
 
 
 class MarketDetector:
+    """ """
+
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
 
@@ -159,7 +179,7 @@ class MarketDetector:
         # --- NEW: Prototype Analysis Setup (replaces Similarity Analysis) ---
         proto_config = kwargs.get("prototype_analysis", {})
         self.prototype_enabled = proto_config.get("enabled", True)
-        self.prototype_lookback = proto_config.get("lookback", 500)
+        self.prototype_lookback = proto_config.get("lookback", 252)
         self.min_history_for_prototype = proto_config.get("min_history", 100)
         self.transition_lambda = proto_config.get(
             "transition_lambda", 1.5
@@ -208,9 +228,17 @@ class MarketDetector:
         garch_vol_state: str,
         macro_signals: Dict,
     ) -> np.ndarray:
-        """
-        MODIFIED: Encodes market state into a de-trended, standardized numerical vector.
+        """MODIFIED: Encodes market state into a de-trended, standardized numerical vector.
         This captures relative market conditions rather than absolute levels.
+
+        Args:
+          index_analysis: Dict:
+          market_breadth: float:
+          garch_vol_state: str:
+          macro_signals: Dict:
+
+        Returns:
+
         """
         vector = [
             # De-trended momentum (medium-term vs long-term)
@@ -234,9 +262,14 @@ class MarketDetector:
     def _update_and_calculate_prototype_factors(
         self, current_vector: np.ndarray
     ) -> Tuple[float, np.ndarray]:
-        """
-        NEW: Maintains a history of state vectors to compute a dynamic "prototype"
+        """NEW: Maintains a history of state vectors to compute a dynamic "prototype"
         of the current market regime and calculates deviation from it.
+
+        Args:
+          current_vector: np.ndarray:
+
+        Returns:
+
         """
         self.prototype_vector_history.append(current_vector)
 
@@ -269,6 +302,17 @@ class MarketDetector:
         symbols: List[str] = None,
         macro_data: Optional[pd.DataFrame] = None,
     ) -> MarketState:
+        """
+
+        Args:
+          market_data: pd.DataFrame:
+          timestamp: pd.Timestamp:
+          symbols: List[str]:  (Default value = None)
+          macro_data: Optional[pd.DataFrame]:  (Default value = None)
+
+        Returns:
+
+        """
         # Cache check
         if self.last_detection_time is not None and self.last_market_state is not None:
             time_diff = (timestamp - self.last_detection_time).total_seconds()
@@ -351,6 +395,15 @@ class MarketDetector:
     def _detect_sideways_market(
         self, market_data: pd.DataFrame, timestamp: pd.Timestamp
     ) -> bool:
+        """
+
+        Args:
+          market_data: pd.DataFrame:
+          timestamp: pd.Timestamp:
+
+        Returns:
+
+        """
         if not self.sideways_detection_enabled:
             return False
         try:
@@ -380,6 +433,17 @@ class MarketDetector:
     def _map_to_macro_regime(
         self, regime: MarketRegime, garch_state: str, macro_signals: Dict[str, float]
     ) -> MacroRegime:
+        """
+
+        Args:
+          regime: MarketRegime:
+          garch_state: str:
+          macro_signals: Dict[str:
+          float]:
+
+        Returns:
+
+        """
         if regime in [MarketRegime.CRISIS, MarketRegime.BEAR]:
             return MacroRegime.DEFENSE
         if (
@@ -403,6 +467,18 @@ class MarketDetector:
         garch_vol_state: str,
         macro_signals: Dict[str, float],
     ) -> Tuple[MarketRegime, float]:
+        """
+
+        Args:
+          index_analysis: Dict:
+          market_breadth: float:
+          garch_vol_state: str:
+          macro_signals: Dict[str:
+          float]:
+
+        Returns:
+
+        """
         ret_50d = index_analysis["return_50d"]
         drawdown = index_analysis["drawdown"]
 
@@ -451,6 +527,14 @@ class MarketDetector:
         return regime, adjusted_confidence
 
     def _assess_risk_level(self, regime: MarketRegime) -> str:
+        """
+
+        Args:
+          regime: MarketRegime:
+
+        Returns:
+
+        """
         if regime in [MarketRegime.CRISIS, MarketRegime.BEAR]:
             return "high"
         if regime == MarketRegime.VOLATILE:
@@ -462,6 +546,15 @@ class MarketDetector:
     def _analyze_market_index(
         self, market_data: pd.DataFrame, timestamp: pd.Timestamp
     ) -> Dict[str, float]:
+        """
+
+        Args:
+          market_data: pd.DataFrame:
+          timestamp: pd.Timestamp:
+
+        Returns:
+
+        """
         index_symbol = "SPY"
         try:
             if index_symbol in market_data.index.get_level_values("symbol"):
@@ -537,6 +630,16 @@ class MarketDetector:
         timestamp: pd.Timestamp,
         symbols: List[str] = None,
     ) -> float:
+        """
+
+        Args:
+          market_data: pd.DataFrame:
+          timestamp: pd.Timestamp:
+          symbols: List[str]:  (Default value = None)
+
+        Returns:
+
+        """
         if symbols is None:
             symbols = RISK_ON_SYMBOLS
         try:
@@ -572,6 +675,7 @@ class MarketDetector:
             return 0.5
 
     def _default_index_analysis(self) -> Dict[str, float]:
+        """ """
         return {
             "return_20d": 0,
             "return_50d": 0,

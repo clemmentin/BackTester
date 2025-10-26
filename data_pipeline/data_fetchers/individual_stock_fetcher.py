@@ -17,6 +17,7 @@ load_dotenv()
 
 
 class IndividualStockFetcher(BaseDataFetcher):
+    """ """
     def __init__(self, cache_dir: Path, db_config: Dict[str, Any]):
         super().__init__(cache_dir, db_config)
         self.logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class IndividualStockFetcher(BaseDataFetcher):
 
     @property
     def data_type(self) -> str:
+        """ """
         return "individual_stocks"
 
     def _uses_database(self) -> bool:
@@ -53,9 +55,17 @@ class IndividualStockFetcher(BaseDataFetcher):
         force_refresh: bool = False,
         **kwargs,
     ) -> pd.DataFrame:
-        """
-        Main fetch method for individual stock snapshot data.
+        """Main fetch method for individual stock snapshot data.
         Uses database if available, falls back to file-based caching.
+
+        Args:
+          symbols: List[str]: 
+          data_types: List[str]:  (Default value = None)
+          force_refresh: bool:  (Default value = False)
+          **kwargs: 
+
+        Returns:
+
         """
         if data_types is None:
             data_types = ["fundamentals", "ratios"]
@@ -108,7 +118,14 @@ class IndividualStockFetcher(BaseDataFetcher):
             return pd.DataFrame()
 
     def _load_from_database(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Load fundamental data from database for a symbol."""
+        """Load fundamental data from database for a symbol.
+
+        Args:
+          symbol: str: 
+
+        Returns:
+
+        """
         if not self.engine:
             return None
         try:
@@ -138,7 +155,15 @@ class IndividualStockFetcher(BaseDataFetcher):
             return None
 
     def _save_to_database(self, data: pd.DataFrame, symbol: str):
-        """Save fundamental data to database."""
+        """Save fundamental data to database.
+
+        Args:
+          data: pd.DataFrame: 
+          symbol: str: 
+
+        Returns:
+
+        """
         if not self.engine or data.empty:
             return
         try:
@@ -172,15 +197,18 @@ class IndividualStockFetcher(BaseDataFetcher):
             self.logger.error(f"Error saving {symbol} to database: {e}")
 
     def _make_api_request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
-        """
-        Make a request to FMP API.
-
+        """Make a request to FMP API.
+        
         Args:
             endpoint: API endpoint (e.g., 'profile/AAPL')
-            params: Additional query parameters
+
+        Args:
+          endpoint: str: 
+          params: Dict:  (Default value = None)
 
         Returns:
-            JSON response as dictionary, or None if request fails
+          JSON response as dictionary, or None if request fails
+
         """
         if params is None:
             params = {}
@@ -213,7 +241,15 @@ class IndividualStockFetcher(BaseDataFetcher):
             return None
 
     def _fetch_from_api(self, symbol: str, data_types: List[str]) -> Optional[Dict]:
-        """Fetches all required data for a single symbol using FMP API."""
+        """Fetches all required data for a single symbol using FMP API.
+
+        Args:
+          symbol: str: 
+          data_types: List[str]: 
+
+        Returns:
+
+        """
         try:
             # Initialize data dictionary
             symbol_data = {"symbol": symbol, "timestamp": datetime.now()}
@@ -238,9 +274,14 @@ class IndividualStockFetcher(BaseDataFetcher):
             return None
 
     def _get_fundamentals(self, symbol: str) -> Optional[Dict]:
-        """
-        Extract fundamental data from FMP API.
+        """Extract fundamental data from FMP API.
         Combines data from multiple endpoints for maximum completeness.
+
+        Args:
+          symbol: str: 
+
+        Returns:
+
         """
         fundamentals = {}
 
@@ -355,8 +396,13 @@ class IndividualStockFetcher(BaseDataFetcher):
         return fundamentals
 
     def _get_ratios(self, symbol: str) -> Dict:
-        """
-        Gets additional financial ratios from FMP.
+        """Gets additional financial ratios from FMP.
+
+        Args:
+          symbol: str: 
+
+        Returns:
+
         """
         ratios = {}
 
@@ -379,7 +425,14 @@ class IndividualStockFetcher(BaseDataFetcher):
         return ratios
 
     def validate_data(self, data: pd.DataFrame) -> bool:
-        """Validates the structure of the final DataFrame."""
+        """Validates the structure of the final DataFrame.
+
+        Args:
+          data: pd.DataFrame: 
+
+        Returns:
+
+        """
         return (
             not data.empty and "symbol" in data.columns and "timestamp" in data.columns
         )

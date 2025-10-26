@@ -9,6 +9,7 @@ import config
 
 
 class MsGarchDetector:
+    """ """
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
 
@@ -79,6 +80,15 @@ class MsGarchDetector:
     def get_volatility_state(
         self, market_returns: pd.Series, timestamp: pd.Timestamp
     ) -> str:
+        """
+
+        Args:
+          market_returns: pd.Series: 
+          timestamp: pd.Timestamp: 
+
+        Returns:
+
+        """
         cache_key = timestamp.date()
         if cache_key in self._cache:
             return self._cache[cache_key]

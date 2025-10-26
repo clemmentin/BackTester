@@ -21,16 +21,28 @@ DB_CONFIG = {
 
 
 class DataHandler(ABC):
+    """ """
     @abstractmethod
     def get_latest_bars(self, symbol, N=1):
+        """
+
+        Args:
+          symbol: 
+          N: (Default value = 1)
+
+        Returns:
+
+        """
         raise NotImplementedError("Should implement get_latest_bars")
 
     @abstractmethod
     def update_bars(self):
+        """ """
         raise NotImplementedError("Should implement update_bars")
 
 
 class HistoricCSVDataHandler(DataHandler):
+    """ """
     def __init__(self, events_queue, csv_dir, symbol_list, signal_csv_path):
         self.events = events_queue
         self.csv_dir = csv_dir
@@ -43,6 +55,7 @@ class HistoricCSVDataHandler(DataHandler):
         self._open_and_load_csv_files()
 
     def load_signal_data(self):
+        """ """
         try:
             signals = pd.read_csv(
                 self.signal_csv_path, header=0, index_col=0, parse_dates=True
@@ -58,6 +71,7 @@ class HistoricCSVDataHandler(DataHandler):
             return None
 
     def _open_and_load_csv_files(self):
+        """ """
         for s in self.symbol_list:
             file_path = f"{self.csv_dir}/{s}.csv"
             price_data = pd.read_csv(file_path, header=0, index_col=0, parse_dates=True)
@@ -75,6 +89,7 @@ class HistoricCSVDataHandler(DataHandler):
             self.symbol_data[s] = combined_data.iterrows()
 
     def update_bars(self):
+        """ """
         for s in self.symbol_list:
             try:
                 timestamp, row = next(self.symbol_data[s])
@@ -96,6 +111,15 @@ class HistoricCSVDataHandler(DataHandler):
                 self.events.put(market_event)
 
     def get_latest_bars(self, symbol, N=1):
+        """
+
+        Args:
+          symbol: 
+          N: (Default value = 1)
+
+        Returns:
+
+        """
         try:
             return [self.latest_symbol_data[symbol]]
         except KeyError:
@@ -104,6 +128,7 @@ class HistoricCSVDataHandler(DataHandler):
 
 
 class HistoricDBDataHandler(DataHandler):
+    """ """
     def __init__(
         self,
         events_queue,
@@ -128,6 +153,16 @@ class HistoricDBDataHandler(DataHandler):
         self.enable_lookahead_check = True
 
     def _validate_vol_forecast(self, symbol, current_timestamp, row):
+        """
+
+        Args:
+          symbol: 
+          current_timestamp: 
+          row: 
+
+        Returns:
+
+        """
         if not self.enable_lookahead_check:
             return row.get("vol_forecast", 0)
 
@@ -145,6 +180,15 @@ class HistoricDBDataHandler(DataHandler):
         return row.get("vol_forecast", 20.0)
 
     def _load_preprocessed_data(self, all_processed_data, start_date=None):
+        """
+
+        Args:
+          all_processed_data: 
+          start_date: (Default value = None)
+
+        Returns:
+
+        """
         print("DATA_HANDLER: Loading and pre-slicing data for fast iteration...")
         if all_processed_data is None or all_processed_data.empty:
             print("DATA_HANDLER ERROR: Received empty or None DataFrame.")
@@ -212,6 +256,7 @@ class HistoricDBDataHandler(DataHandler):
             self.continue_backtest = False
 
     def update_bars(self):
+        """ """
         if self.current_time_index >= len(self.timeline):
             self.continue_backtest = False
             return
@@ -267,6 +312,15 @@ class HistoricDBDataHandler(DataHandler):
         self.current_time_index += 1
 
     def get_latest_bars(self, symbol, N=1):
+        """
+
+        Args:
+          symbol: 
+          N: (Default value = 1)
+
+        Returns:
+
+        """
         try:
             return [self.latest_symbol_data[symbol]]
         except KeyError:

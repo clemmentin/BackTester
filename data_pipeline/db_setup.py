@@ -17,6 +17,7 @@ NEW_TABLE_NAME = "daily_prices"
 
 
 def setup_databases():
+    """ """
     try:
         print("Connecting")
         conn = psycopg2.connect(**DB_CONFIG)

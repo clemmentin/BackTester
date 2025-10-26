@@ -21,9 +21,17 @@ from .bayesian_ev_calculator import BayesianEVCalculator, SignalOutcome
 
 
 def _calculate_alpha_task(module_instance, method_name, source_enum, *args):
-    """
-    Wrapper function to execute an alpha module's calculation method.
+    """Wrapper function to execute an alpha module's calculation method.
     Returns a tuple containing the source enum and the calculated signals.
+
+    Args:
+      module_instance:
+      method_name:
+      source_enum:
+      *args:
+
+    Returns:
+
     """
     try:
         calculation_method = getattr(module_instance, method_name)
@@ -35,6 +43,8 @@ def _calculate_alpha_task(module_instance, method_name, source_enum, *args):
 
 
 class AlphaSource(Enum):
+    """ """
+
     REVERSAL = "reversal"
     PRICE = "price"
     LIQUIDITY = "liquidity"
@@ -42,6 +52,8 @@ class AlphaSource(Enum):
 
 
 class AlphaEngine:
+    """ """
+
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
         self.all_params = kwargs.copy()
@@ -120,6 +132,14 @@ class AlphaEngine:
         self.executor.shutdown()
 
     def save_bayesian_priors(self, filepath: str):
+        """
+
+        Args:
+          filepath: str:
+
+        Returns:
+
+        """
         try:
             priors_data = self.bayesian_ev.export_priors()
             with open(filepath, "w") as f:
@@ -129,6 +149,14 @@ class AlphaEngine:
             self.logger.error(f"Failed to save Bayesian priors: {e}")
 
     def load_bayesian_priors(self, filepath: str):
+        """
+
+        Args:
+          filepath: str:
+
+        Returns:
+
+        """
         try:
             with open(filepath, "r") as f:
                 priors_data = json.load(f)
@@ -148,6 +176,17 @@ class AlphaEngine:
         timestamp: pd.Timestamp,
         spy_entry_price: Optional[float] = None,
     ):
+        """
+
+        Args:
+          symbol: str:
+          entry_price: float:
+          timestamp: pd.Timestamp:
+          spy_entry_price: Optional[float]:  (Default value = None)
+
+        Returns:
+
+        """
         if symbol in self._last_generated_signals_cache:
             signal_data = self._last_generated_signals_cache[symbol]
             self.active_signals[symbol] = {
@@ -166,6 +205,17 @@ class AlphaEngine:
         timestamp: pd.Timestamp,
         market_data: Optional[pd.DataFrame] = None,
     ):
+        """
+
+        Args:
+          current_prices: Dict[str:
+          float]:
+          timestamp: pd.Timestamp:
+          market_data: Optional[pd.DataFrame]:  (Default value = None)
+
+        Returns:
+
+        """
         completed_symbols = []
         for symbol, active_signal in self.active_signals.items():
             days_held = (timestamp - active_signal["entry_timestamp"]).days
@@ -237,6 +287,20 @@ class AlphaEngine:
         macro_data: Optional[pd.DataFrame] = None,
         market_state: Optional[MarketState] = None,
     ) -> Dict[AlphaSource, RawAlphaSignalDict]:
+        """
+
+        Args:
+          market_data: pd.DataFrame:
+          symbols: List[str]:
+          timestamp: pd.Timestamp:
+          fundamental_data: Optional[Dict[str:
+          Dict]]:  (Default value = None)
+          macro_data: Optional[pd.DataFrame]:  (Default value = None)
+          market_state: Optional[MarketState]:  (Default value = None)
+
+        Returns:
+
+        """
         if market_state is None:
             market_state = self.market_detector.detect_market_state(
                 market_data, timestamp, symbols, macro_data=macro_data
@@ -274,7 +338,7 @@ class AlphaEngine:
 
         ic_summary = ", ".join(
             [
-                f"{s.name}={self.smoothed_ic.get(s, 0.0):.3f}"
+                f"{s}={self.smoothed_ic.get(s, 0.0):.3f}"
                 for s in self.base_weights.keys()
             ]
         )
@@ -293,9 +357,15 @@ class AlphaEngine:
     def _apply_momentum_confirmation(
         self, factor_signals: Dict[AlphaSource, RawAlphaSignalDict]
     ) -> Dict[AlphaSource, RawAlphaSignalDict]:
-        """
-        (MODIFIED) Use Momentum signals to confirm/reject Reversal and Liquidity signals
+        """(MODIFIED) Use Momentum signals to confirm/reject Reversal and Liquidity signals
         by adjusting their confidence scores.
+
+        Args:
+          factor_signals: Dict[AlphaSource:
+          RawAlphaSignalDict]:
+
+        Returns:
+
         """
         momentum_signals = factor_signals.get(AlphaSource.MOMENTUM, {})
         if not momentum_signals:
@@ -338,6 +408,14 @@ class AlphaEngine:
     def _get_dynamic_weights(
         self, market_state: MarketState
     ) -> Dict[AlphaSource, float]:
+        """
+
+        Args:
+          market_state: MarketState:
+
+        Returns:
+
+        """
         if not self.ic_dynamic_weights or not self.ic_enabled:
             return self.base_weights
 
@@ -384,8 +462,15 @@ class AlphaEngine:
         timestamp: pd.Timestamp,
         market_state: MarketState,
     ) -> Dict[AlphaSource, Dict]:
-        """
-        MODIFIED: Implements data slicing before parallel execution to reduce IPC overhead.
+        """MODIFIED: Implements data slicing before parallel execution to reduce IPC overhead.
+
+        Args:
+          market_data: pd.DataFrame:
+          timestamp: pd.Timestamp:
+          market_state: MarketState:
+
+        Returns:
+
         """
         today_data = market_data.loc[
             market_data.index.get_level_values("timestamp") <= timestamp
@@ -466,6 +551,14 @@ class AlphaEngine:
         return factor_signals
 
     def _update_ic_scores(self, timestamp: pd.Timestamp):
+        """
+
+        Args:
+          timestamp: pd.Timestamp:
+
+        Returns:
+
+        """
         required_len = self.fwd_return_period + 1
         if len(self.prices_history) < required_len:
             return
@@ -513,6 +606,17 @@ class AlphaEngine:
         factor_signals: Dict[AlphaSource, Dict],
         market_data: pd.DataFrame,
     ):
+        """
+
+        Args:
+          timestamp: pd.Timestamp:
+          factor_signals: Dict[AlphaSource:
+          Dict]:
+          market_data: pd.DataFrame:
+
+        Returns:
+
+        """
         if self.prices_history and self.prices_history[-1][0] == timestamp:
             return
 
@@ -537,6 +641,16 @@ class AlphaEngine:
     def _calculate_expected_values(
         self, factor_signals: Dict[AlphaSource, Dict], market_state: MarketState
     ) -> None:
+        """
+
+        Args:
+          factor_signals: Dict[AlphaSource:
+          Dict]:
+          market_state: MarketState:
+
+        Returns:
+
+        """
         regime = market_state.regime.value.lower()
         for source, signals in factor_signals.items():
             if not signals:
@@ -562,6 +676,14 @@ class AlphaEngine:
                 )
 
     def _save_outcome_for_ml(self, outcome: "SignalOutcome"):
+        """
+
+        Args:
+          outcome: "SignalOutcome":
+
+        Returns:
+
+        """
         outcome_dict = {
             k: v for k, v in outcome.__dict__.items() if not isinstance(v, pd.Timestamp)
         }
@@ -576,6 +698,7 @@ class AlphaEngine:
             df_new.to_csv(filepath, mode="a", header=False, index=False)
 
     def finalize_learning(self):
+        """ """
         self.logger.info("Finalizing AlphaEngine learning...")
         if hasattr(self.bayesian_ev, "finalize_learning"):
             self.bayesian_ev.finalize_learning()

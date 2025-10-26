@@ -112,6 +112,7 @@ class BayesianEVCalculator:
         )
 
     def _initialize_priors(self):
+        """ """
         factors = ["reversal", "price", "liquidity"]
         regimes = ["crisis", "bear", "volatile", "normal", "bull", "strong_bull"]
         base_priors = {
@@ -274,6 +275,7 @@ class BayesianEVCalculator:
                     self.priors[factor][regime] = BayesianPrior()
 
     def _load_priors_from_disk(self):
+        """ """
         save_path = Path(self.persistence_dir) / "priors_latest.json"
         if not save_path.exists():
             self.logger.info(
@@ -296,6 +298,14 @@ class BayesianEVCalculator:
             self.logger.info("Using default initialization instead.")
 
     def _save_priors_to_disk(self, force: bool = False):
+        """
+
+        Args:
+          force: bool:  (Default value = False)
+
+        Returns:
+
+        """
         if not self.enable_persistence:
             return
         updates_since_save = self._update_counter - self._last_save_counter
@@ -336,6 +346,7 @@ class BayesianEVCalculator:
             self.logger.error(f"Failed to save priors: {e}")
 
     def finalize_learning(self):
+        """ """
         self.logger.info(
             f"Finalizing backtest learning. Total updates this run: {self._update_counter}"
         )
@@ -350,6 +361,19 @@ class BayesianEVCalculator:
         factor_ic: float = 0.0,
         components: Optional[Dict] = None,
     ) -> Tuple[float, Dict]:
+        """
+
+        Args:
+          signal_score: float: 
+          signal_confidence: float: 
+          factor_source: str: 
+          regime: str: 
+          factor_ic: float:  (Default value = 0.0)
+          components: Optional[Dict]:  (Default value = None)
+
+        Returns:
+
+        """
         if not self.enabled:
             return self._simple_ev(signal_score, signal_confidence), {}
 
@@ -399,6 +423,15 @@ class BayesianEVCalculator:
         return ev, diagnostics
 
     def _get_prior(self, factor_source: str, regime: str) -> BayesianPrior:
+        """
+
+        Args:
+          factor_source: str: 
+          regime: str: 
+
+        Returns:
+
+        """
         regime_lower = regime.lower()
         if factor_source in self.priors and regime_lower in self.priors[factor_source]:
             return self.priors[factor_source][regime_lower]
@@ -409,6 +442,16 @@ class BayesianEVCalculator:
     def _calculate_posterior_win_rate(
         self, prior: BayesianPrior, signal_confidence: float, factor_ic: float
     ) -> Tuple[float, float, float]:
+        """
+
+        Args:
+          prior: BayesianPrior: 
+          signal_confidence: float: 
+          factor_ic: float: 
+
+        Returns:
+
+        """
         alpha, beta = prior.alpha, prior.beta
         ic_adjustment = self.ic_influence_on_prior * factor_ic * self.prior_strength
         if ic_adjustment > 0:
@@ -440,6 +483,17 @@ class BayesianEVCalculator:
         signal_confidence: float,
         factor_ic: float,
     ) -> float:
+        """
+
+        Args:
+          prior: BayesianPrior: 
+          signal_score: float: 
+          signal_confidence: float: 
+          factor_ic: float: 
+
+        Returns:
+
+        """
         prior_mean, prior_weight = prior.mean_gain, prior.pseudocount
         signal_implied_gain = (
             abs(signal_score) * signal_confidence * self.signal_to_gain_scaler
@@ -458,6 +512,16 @@ class BayesianEVCalculator:
     def _calculate_expected_loss(
         self, prior: BayesianPrior, signal_score: float, signal_confidence: float
     ) -> float:
+        """
+
+        Args:
+          prior: BayesianPrior: 
+          signal_score: float: 
+          signal_confidence: float: 
+
+        Returns:
+
+        """
         if not self.dynamic_stop_loss:
             return self.base_stop_loss
 
@@ -469,6 +533,14 @@ class BayesianEVCalculator:
         return float(np.clip(expected_loss, 0.01, 0.05))
 
     def update_with_outcome(self, outcome: SignalOutcome):
+        """
+
+        Args:
+          outcome: SignalOutcome: 
+
+        Returns:
+
+        """
         prior = self._get_prior(outcome.factor_source, outcome.regime)
         self.outcome_history.append(outcome)
         if prior.total_signals < self.min_observations_for_update:
@@ -548,12 +620,22 @@ class BayesianEVCalculator:
         )
 
     def _simple_ev(self, score: float, confidence: float) -> float:
+        """
+
+        Args:
+          score: float: 
+          confidence: float: 
+
+        Returns:
+
+        """
         win_rate = 0.45 + (confidence * 0.25)
         expected_gain = abs(score) * confidence * 0.05
         expected_loss = self.base_stop_loss
         return (win_rate * expected_gain) - ((1.0 - win_rate) * expected_loss)
 
     def get_prior_statistics(self) -> pd.DataFrame:
+        """ """
         rows = []
         for factor, regimes in self.priors.items():
             for regime, prior in regimes.items():
@@ -574,6 +656,14 @@ class BayesianEVCalculator:
         return pd.DataFrame(rows)
 
     def import_priors(self, priors_data: Dict):
+        """
+
+        Args:
+          priors_data: Dict: 
+
+        Returns:
+
+        """
         self.priors = defaultdict(dict)
         for factor, regimes in priors_data.items():
             for regime, data in regimes.items():
@@ -598,6 +688,7 @@ class BayesianEVCalculator:
         )
 
     def export_priors(self) -> Dict:
+        """ """
         export_dict = {}
         for factor, regimes in self.priors.items():
             export_dict[factor] = {}

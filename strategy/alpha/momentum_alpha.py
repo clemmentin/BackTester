@@ -7,6 +7,7 @@ from strategy.alpha.market_detector import MarketState, MarketRegime
 
 
 class MomentumAlphaModule:
+    """ """
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
         momentum_params = kwargs.get("momentum_alpha_params", {})
@@ -61,7 +62,14 @@ class MomentumAlphaModule:
         )
 
     def _get_dynamic_periods(self, market_state: MarketState) -> Tuple[int, int]:
-        """NEW: Determines momentum formation and skip periods based on the market state."""
+        """NEW: Determines momentum formation and skip periods based on the market state.
+
+        Args:
+          market_state: MarketState: 
+
+        Returns:
+
+        """
         base_formation, base_skip = 84, 14
 
         # Adjust based on volatility regime
@@ -85,6 +93,14 @@ class MomentumAlphaModule:
         return formation_period, skip_period
 
     def _calculate_max_drawdown(self, price_series: pd.Series) -> float:
+        """
+
+        Args:
+          price_series: pd.Series: 
+
+        Returns:
+
+        """
         running_max = price_series.expanding(min_periods=1).max()
         drawdown = (running_max - price_series) / running_max
         return drawdown.max()
@@ -96,6 +112,18 @@ class MomentumAlphaModule:
         timestamp: pd.Timestamp,
         market_state: MarketState,  # MODIFIED: Accepts full market state
     ) -> Dict[str, RawAlphaSignal]:
+        """
+
+        Args:
+          prices: pd.DataFrame: 
+          volumes: pd.DataFrame: 
+          timestamp: pd.Timestamp: 
+          market_state: MarketState: 
+          # MODIFIED: Accepts full market state: 
+
+        Returns:
+
+        """
 
         # NEW: Dynamically determine lookback periods.
         formation_period, skip_period = self._get_dynamic_periods(market_state)

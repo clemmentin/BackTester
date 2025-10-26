@@ -12,6 +12,7 @@ from .base_fetcher import BaseDataFetcher  # Import the updated base class
 
 
 class MacroDataFetcher(BaseDataFetcher):
+    """ """
     def __init__(self, cache_dir: Path, db_config: Dict[str, Any], **kwargs):
         super().__init__(cache_dir, db_config)
         self.logger = logging.getLogger(__name__)
@@ -31,14 +32,24 @@ class MacroDataFetcher(BaseDataFetcher):
 
     @property
     def data_type(self) -> str:
+        """ """
         return "macro"
 
     # MODIFIED: Tell the base class that this fetcher needs a database
     def _uses_database(self) -> bool:
+        """ """
         return True
 
     # The rest of the file can remain as is. For completeness:
     def _check_existing_data(self, series_ids: List[str]) -> Dict:
+        """
+
+        Args:
+          series_ids: List[str]: 
+
+        Returns:
+
+        """
         if not self.engine:
             return {}
         existing_data = {}
@@ -57,6 +68,14 @@ class MacroDataFetcher(BaseDataFetcher):
         return existing_data
 
     def _save_to_database(self, data: pd.DataFrame):
+        """
+
+        Args:
+          data: pd.DataFrame: 
+
+        Returns:
+
+        """
         if not self.engine or data.empty:
             return
         try:
@@ -73,6 +92,16 @@ class MacroDataFetcher(BaseDataFetcher):
     def _load_all_from_database(
         self, series_ids: List[str], start_date: str, end_date: str
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          series_ids: List[str]: 
+          start_date: str: 
+          end_date: str: 
+
+        Returns:
+
+        """
         if not self.engine:
             return pd.DataFrame()
         try:
@@ -104,6 +133,18 @@ class MacroDataFetcher(BaseDataFetcher):
         end_date: str,
         force_refresh: bool = False,
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          indicators: Dict[str: 
+          str]: 
+          start_date: str: 
+          end_date: str: 
+          force_refresh: bool:  (Default value = False)
+
+        Returns:
+
+        """
         if not self.fred:
             return pd.DataFrame()
         if not self.engine or force_refresh:
@@ -131,11 +172,29 @@ class MacroDataFetcher(BaseDataFetcher):
         )
 
     def _needs_update(self, series_id: str, info: Dict) -> bool:
+        """
+
+        Args:
+          series_id: str: 
+          info: Dict: 
+
+        Returns:
+
+        """
         freq = self.indicator_frequency_map.get(series_id, "high_frequency")
         days = self.update_frequency.get(freq, 1)
         return (datetime.now().date() - info["max_date"].date()).days >= days
 
     def _download_and_save(self, series_list: List[dict], end_date: str):
+        """
+
+        Args:
+          series_list: List[dict]: 
+          end_date: str: 
+
+        Returns:
+
+        """
         all_data = []
         end_date_dt = pd.to_datetime(end_date)
 
@@ -170,6 +229,17 @@ class MacroDataFetcher(BaseDataFetcher):
     def _download_all_indicators(
         self, indicators: Dict[str, str], start: str, end: str
     ) -> pd.DataFrame:
+        """
+
+        Args:
+          indicators: Dict[str: 
+          str]: 
+          start: str: 
+          end: str: 
+
+        Returns:
+
+        """
         series = {
             sid: self.fred.get_series(sid, observation_start=start, observation_end=end)
             for sid in indicators
@@ -177,4 +247,12 @@ class MacroDataFetcher(BaseDataFetcher):
         return pd.DataFrame(series).ffill()
 
     def validate_data(self, data: pd.DataFrame) -> bool:
+        """
+
+        Args:
+          data: pd.DataFrame: 
+
+        Returns:
+
+        """
         return super().validate_data(data)

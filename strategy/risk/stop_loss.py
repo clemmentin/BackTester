@@ -58,7 +58,16 @@ class StopManager:
     def add_position(
         self, symbol: str, entry_price: float, stop_loss_pct: Optional[float] = None
     ):
-        """Adds a new position to be tracked, using a dynamic or fixed stop loss."""
+        """Adds a new position to be tracked, using a dynamic or fixed stop loss.
+
+        Args:
+          symbol: str: 
+          entry_price: float: 
+          stop_loss_pct: Optional[float]:  (Default value = None)
+
+        Returns:
+
+        """
         if not self.enabled:
             return
 
@@ -88,7 +97,16 @@ class StopManager:
     def update_stops(
         self, price_data: Dict[str, float], timestamp: datetime
     ) -> List[StopSignal]:
-        """Updates all stops based on the latest price data and generates exit signals."""
+        """Updates all stops based on the latest price data and generates exit signals.
+
+        Args:
+          price_data: Dict[str: 
+          float]: 
+          timestamp: datetime: 
+
+        Returns:
+
+        """
         if not self.enabled:
             return []
 
@@ -176,13 +194,27 @@ class StopManager:
         return signals
 
     def remove_position(self, symbol: str):
-        """Removes a position from the stop tracker after it's sold."""
+        """Removes a position from the stop tracker after it's sold.
+
+        Args:
+          symbol: str: 
+
+        Returns:
+
+        """
         if symbol in self.stops:
             del self.stops[symbol]
             self.logger.debug(f"Stop tracker removed for: {symbol}")
 
     def get_stop_info(self, symbol: str) -> Optional[StopInfo]:
-        """Retrieves stop information for a single symbol."""
+        """Retrieves stop information for a single symbol.
+
+        Args:
+          symbol: str: 
+
+        Returns:
+
+        """
         return self.stops.get(symbol)
 
     def get_all_stops(self) -> Dict[str, float]:

@@ -14,9 +14,13 @@ from strategy.contracts import (
 
 
 class PortfolioConstructor:
-    """
-    Acts as Layer 4: Portfolio Construction.
+    """Acts as Layer 4: Portfolio Construction.
     Constructs a portfolio for a SINGLE alpha sleeve, with weights driven purely by Bayesian EV.
+
+    Args:
+
+    Returns:
+
     """
 
     def __init__(self, **kwargs):
@@ -45,9 +49,17 @@ class PortfolioConstructor:
         risk_budget: RiskBudget,
         **kwargs,  # Accept other potential args but ignore them.
     ) -> FinalTargetPortfolio:
-        """
-        Constructs the final target portfolio for a single alpha sleeve.
+        """Constructs the final target portfolio for a single alpha sleeve.
         MODIFIED: Simplified to remove stratified pool logic.
+
+        Args:
+          alpha_signals: RawAlphaSignalDict: 
+          risk_budget: RiskBudget: 
+          **kwargs: 
+          # Accept other potential args but ignore them.: 
+
+        Returns:
+
         """
         if not alpha_signals:
             return {}
@@ -84,9 +96,16 @@ class PortfolioConstructor:
         selected_signals: Dict[str, RawAlphaSignal],
         risk_budget: RiskBudget,
     ) -> FinalTargetPortfolio:
-        """
-        Calculates position weights strictly proportional to their positive Expected Value.
+        """Calculates position weights strictly proportional to their positive Expected Value.
         MODIFIED: This is now the core weighting logic, replacing the stratified approach.
+
+        Args:
+          selected_signals: Dict[str: 
+          RawAlphaSignal]: 
+          risk_budget: RiskBudget: 
+
+        Returns:
+
         """
         if not selected_signals:
             return {}
@@ -120,7 +139,16 @@ class PortfolioConstructor:
     def _apply_weight_constraints(
         self, position_values: Dict[str, float], target_exposure: float
     ) -> Dict[str, float]:
-        """Apply min/max weight constraints for the sleeve."""
+        """Apply min/max weight constraints for the sleeve.
+
+        Args:
+          position_values: Dict[str: 
+          float]: 
+          target_exposure: float: 
+
+        Returns:
+
+        """
         if not position_values:
             return {}
 

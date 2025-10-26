@@ -27,7 +27,25 @@ from .performance import (
 def _get_spy_benchmark(
     start_date: pd.Timestamp, end_date: pd.Timestamp, initial_capital: float
 ) -> Optional[pd.DataFrame]:
-    """Fetches and processes SPY data to be used as a benchmark equity curve."""
+    """Fetches and processes SPY data to be used as a benchmark equity curve.
+
+    Args:
+      start_date: pd.Timestamp:
+      end_date: pd.Timestamp:
+      initial_capital: float:
+      start_date: pd.Timestamp:
+      end_date: pd.Timestamp:
+      initial_capital: float:
+      start_date: pd.Timestamp:
+      end_date: pd.Timestamp:
+      initial_capital: float:
+      start_date: pd.Timestamp: 
+      end_date: pd.Timestamp: 
+      initial_capital: float: 
+
+    Returns:
+
+    """
     spy_data = yf.download(
         "SPY",
         start=start_date - timedelta(days=5),
@@ -87,7 +105,29 @@ def generate_report(
     initial_capital: float,
     diagnostics_log: Optional[List[Dict]] = None,
 ):
-    """Generate a comprehensive backtest report including performance and diagnostic analysis."""
+    """Generate a comprehensive backtest report including performance and diagnostic analysis.
+
+    Args:
+      holdings_df: pd.DataFrame:
+      closed_trades_df: pd.DataFrame:
+      initial_capital: float:
+      diagnostics_log: Optional[List[Dict]]:  (Default value = None)
+      holdings_df: pd.DataFrame:
+      closed_trades_df: pd.DataFrame:
+      initial_capital: float:
+      diagnostics_log: Optional[List[Dict]]:  (Default value = None)
+      holdings_df: pd.DataFrame:
+      closed_trades_df: pd.DataFrame:
+      initial_capital: float:
+      diagnostics_log: Optional[List[Dict]]:  (Default value = None)
+      holdings_df: pd.DataFrame: 
+      closed_trades_df: pd.DataFrame: 
+      initial_capital: float: 
+      diagnostics_log: Optional[List[Dict]]:  (Default value = None)
+
+    Returns:
+
+    """
     print("\n--- [Analysis] Starting Report Generation ---")
 
     if holdings_df is None or holdings_df.empty or len(holdings_df) < 2:
