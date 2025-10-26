@@ -10,6 +10,7 @@ from backtester.events import OrderEvent, SignalEvent
 
 class Portfolio:
     """ """
+
     def __init__(
         self,
         events_queue,
@@ -55,6 +56,12 @@ class Portfolio:
         }
         for s in symbol_list:
             self.current_holdings[s] = 0.0
+
+        sizing_params = tp.TRADING_PARAMS.get("position_sizing", {})
+        self.min_trade_size_dollars = sizing_params.get(
+            "min_trade_size_dollars", 1000.0
+        )
+        self.min_trade_size_shares = sizing_params.get("min_trade_size_shares", 10)
 
         # === Position Tracking (for PnL calculation) ===
         self.position_entries = (
@@ -119,7 +126,7 @@ class Portfolio:
         Pure bookkeeping - no risk decisions
 
         Args:
-          event: 
+          event:
 
         Returns:
 
@@ -183,7 +190,7 @@ class Portfolio:
         """
 
         Args:
-          event: 
+          event:
 
         Returns:
 
@@ -210,7 +217,7 @@ class Portfolio:
         This handles initial buys, increasing a position, and reducing a position.
 
         Args:
-          signal: SignalEvent: 
+          signal: SignalEvent:
 
         Returns:
 
@@ -236,7 +243,25 @@ class Portfolio:
         # --- 4. Determine the trade quantity and direction ---
         quantity_to_trade = target_shares - current_shares
 
-        # --- 5. Generate Order Event ---
+        # --- 5. Minimum trade size check ---
+        trade_value = abs(quantity_to_trade) * current_price
+
+        is_below_shares_min = abs(quantity_to_trade) < self.min_trade_size_shares
+        is_below_dollars_min = trade_value < self.min_trade_size_dollars
+
+        should_filter = False
+
+        if is_below_shares_min or is_below_dollars_min:
+            should_filter = True
+
+        if should_filter:
+            self.logger.info(
+                f"PORTFOLIO FILTER: Skipping {'BUY' if quantity_to_trade > 0 else 'SELL'} trade for {symbol}. "
+                f"Shares={abs(quantity_to_trade)}, Value=${trade_value:,.0f} (Min Shares={self.min_trade_size_shares}, Min Value=${self.min_trade_size_dollars:,.0f})."
+            )
+            return
+
+        # --- 6. Generate Order Event ---
         if quantity_to_trade > 0:
             # This is a BUY or INCREASE order
 
@@ -292,7 +317,7 @@ class Portfolio:
         """Process sell signal - exit entire position
 
         Args:
-          signal: 
+          signal:
 
         Returns:
 
@@ -318,7 +343,7 @@ class Portfolio:
         """Process fill events - update positions and cash
 
         Args:
-          event: 
+          event:
 
         Returns:
 
@@ -333,7 +358,7 @@ class Portfolio:
 
     def _process_buy_fill(self, event):
         """Process executed buy order using Average Cost Method.
-        
+
         When adding to an existing position, the cost basis is updated to the
         weighted average of the old position and new purchase:
         New Average Cost = (Old Cost × Old Qty + New Cost × New Qty) / Total Qty
@@ -404,10 +429,10 @@ class Portfolio:
 
     def _process_sell_fill(self, event):
         """Process executed sell order using Average Cost Method.
-        
+
         PnL is calculated using the average cost basis:
         Realized PnL = (Exit Price - Average Cost) × Quantity Sold - Commission
-        
+
         For partial exits, the remaining position keeps the same average cost.
 
         Args:
@@ -501,7 +526,7 @@ class Portfolio:
         """Update trade statistics
 
         Args:
-          pnl: 
+          pnl:
 
         Returns:
 

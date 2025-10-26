@@ -13,6 +13,7 @@ import numpy as np
 
 class DecisionEngine:
     """ """
+
     def __init__(
         self,
         initial_capital: float,
@@ -31,7 +32,7 @@ class DecisionEngine:
             self.alpha_engine.market_detector
         )  # Reuse the instance from AlphaEngine
 
-        # --- [NEW] Load Offensive Mode Parameters from WFO ---
+        # --- Load Offensive Mode Parameters from WFO ---
         self.min_ev_percentile_filter = strategy_kwargs.get(
             "min_ev_percentile_filter", 0.25
         )
@@ -66,10 +67,10 @@ class DecisionEngine:
         """
 
         Args:
-          timestamp: pd.Timestamp: 
-          portfolio_value: float: 
-          market_data_for_day: pd.DataFrame: 
-          current_positions: Dict: 
+          timestamp: pd.Timestamp:
+          portfolio_value: float:
+          market_data_for_day: pd.DataFrame:
+          current_positions: Dict:
 
         Returns:
 
@@ -99,7 +100,7 @@ class DecisionEngine:
         }
         diagnostics["initial_signal_count"] = len(all_raw_signals)
 
-        # --- 3. [NEW] Filter Signals Based on EV Percentile ---
+        # --- 3.  Filter Signals Based on EV Percentile ---
         if not all_raw_signals:
             return {}, diagnostics
 
@@ -118,7 +119,24 @@ class DecisionEngine:
         if not filtered_signals:
             return {}, diagnostics
 
-        # --- 4. [NEW] Determine Dynamic Total Risk Budget ---
+        # --- 4.  Filter Signals Based on Position Limit ---
+        MAX_POSITIONS_HARD_LIMIT = config.get_trading_param(
+            "RISK_PARAMS", "position_management", default={}
+        ).get("max_total_positions", 20)
+
+        sorted_candidates = sorted(
+            filtered_signals.items(),
+            key=lambda x: x[1].expected_value,
+            reverse=True,
+        )
+
+        final_signals_for_sizing = dict(sorted_candidates[:MAX_POSITIONS_HARD_LIMIT])
+
+        diagnostics["signals_after_max_pos_limit"] = len(final_signals_for_sizing)
+
+        if not final_signals_for_sizing:
+            return {}, diagnostics
+        # --- 5.  Determine Dynamic Total Risk Budget ---
         current_target_utilization = self.base_target_utilization
 
         # Apply bull market leverage
@@ -135,9 +153,9 @@ class DecisionEngine:
         total_risk_budget = portfolio_value * final_target_utilization
         diagnostics["final_target_utilization"] = final_target_utilization
 
-        # --- 5. [NEW] Calculate Final Target Positions ---
+        # --- 6.  Calculate Final Target Positions ---
         target_portfolio_values = self._calculate_target_positions(
-            filtered_signals, total_risk_budget
+            final_signals_for_sizing, total_risk_budget
         )
         diagnostics["final_signals"] = filtered_signals
 
@@ -149,8 +167,8 @@ class DecisionEngine:
         """Calculates the target dollar value for each position based on signal strength.
 
         Args:
-          signals: Dict: 
-          total_risk_budget: float: 
+          signals: Dict:
+          total_risk_budget: float:
 
         Returns:
 
@@ -197,7 +215,7 @@ class DecisionEngine:
         In a more complex system, this could involve weighting, conflict resolution, etc.
 
         Args:
-          signals_by_source: Dict: 
+          signals_by_source: Dict:
 
         Returns:
 
@@ -221,9 +239,9 @@ class DecisionEngine:
         This simplified version uses a score-weighted allocation.
 
         Args:
-          signals: list[RawAlphaSignal]: 
-          risk_budget: "RiskBudget": 
-          market_state: "MarketState": 
+          signals: list[RawAlphaSignal]:
+          risk_budget: "RiskBudget":
+          market_state: "MarketState":
 
         Returns:
 
@@ -262,10 +280,10 @@ class DecisionEngine:
         """Adjusts the ideal target portfolio to ensure new buys do not exceed available cash.
 
         Args:
-          ideal_target_portfolio: Dict[str: 
-          float]: 
-          current_position_values: Dict[str: 
-          available_cash: float: 
+          ideal_target_portfolio: Dict[str:
+          float]:
+          current_position_values: Dict[str:
+          available_cash: float:
 
         Returns:
 

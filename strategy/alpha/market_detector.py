@@ -188,6 +188,8 @@ class MarketDetector:
         # History for prototype analysis
         self.prototype_vector_history = deque(maxlen=self.prototype_lookback)
 
+        self.distance_history = deque(maxlen=self.prototype_lookback)
+
         sideways_config = config.get_trading_param(
             "RISK_PARAMS", "sideways_detection", default={}
         )
@@ -271,27 +273,35 @@ class MarketDetector:
         Returns:
 
         """
-        self.prototype_vector_history.append(current_vector)
-
         # Check if we have enough data to perform the analysis
         if len(self.prototype_vector_history) < self.min_history_for_prototype:
-            # Not enough history, return neutral adjustment
+            # Not enough history yet. Update history and return neutral adjustment for today.
+            self.prototype_vector_history.append(current_vector)
             return 1.0, np.zeros_like(current_vector)
 
-        # --- Calculate the sliding prototype and deviation ---
         historical_vectors = np.array(self.prototype_vector_history, dtype=np.float32)
         prototype_vector = historical_vectors.mean(axis=0)
 
-        # Calculate deviation vector (micro-level alpha adjustment)
         deviation_vector = current_vector - prototype_vector
-
-        # Calculate Euclidean distance to the prototype
         distance = np.linalg.norm(deviation_vector)
 
-        # Calculate transition adjustment factor (macro-level risk scaling)
-        # This factor approaches 1 when the market is "normal" (close to prototype)
-        # and approaches 0 as the market deviates significantly.
-        transition_adjustment = np.exp(-self.transition_lambda * distance)
+        self.distance_history.append(distance)  # Keep a history of distances
+        if len(self.distance_history) > self.min_history_for_prototype:
+            mean_dist = np.mean(self.distance_history)
+            std_dist = np.std(self.distance_history)
+            if std_dist > 1e-6:
+                # Calculate how "unusual" today's distance is (Z-Score)
+                z_score_deviation = (distance - mean_dist) / std_dist
+                # Only penalize abnormally high deviations
+                penalty_deviation = max(0, z_score_deviation)
+                transition_adjustment = np.exp(
+                    -self.transition_lambda * penalty_deviation
+                )
+            else:
+                transition_adjustment = 1.0
+        else:
+            transition_adjustment = 1.0
+        self.prototype_vector_history.append(current_vector)
 
         return transition_adjustment, deviation_vector
 

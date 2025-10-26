@@ -7,12 +7,16 @@ TRADING_PARAMS = {
         "enable_volume_slippage_model": True,
         "slippage_model_k": 0.1,
     },
+    "position_sizing": {
+        "min_trade_size_dollars": 2000.0,
+        "min_trade_size_shares": 20,
+    },
 }
 
 # === CORE RISK PARAMETERS ===
 RISK_PARAMS = {
     "portfolio_limits": {
-        "max_single_position": 0.18,  # Max weight for any single stock
+        "max_single_position": 0.20,  # Max weight for any single stock
         "min_single_position": 0.02,  # Min weight to avoid tiny, inefficient positions
     },
     "position_management": {

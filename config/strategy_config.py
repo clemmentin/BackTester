@@ -20,7 +20,7 @@ HYBRID_DUAL_PARAMS = {
     "rebalance_frequency": "weekly",
     "min_ev_percentile_filter": 0.23,
     "sizing_ev_to_confidence_ratio": 0.71,
-    "bull_market_leverage": 1.08,
+    "bull_market_leverage": 1.07,
     # =================== ALPHA ENGINE & FACTORS ===================
     "alpha_engine": {
         "combination_mode": "smart_weighted",
