@@ -18,6 +18,7 @@ from analysis.performance import create_equity_curve_dataframe
 from backtester.engine import BacktestEngine
 from config import strategy_config
 from strategy.simulation.MonteCarlo import MonteCarloSimulator
+from analysis.runner import generate_report
 
 
 @dataclass
@@ -83,6 +84,7 @@ def objective_function_wrapper(params_data_tuple: Tuple) -> float:
             start_date=start_date,
             risk_on_symbols=risk_on,
             risk_off_symbols=risk_off,
+            warmup_days=config.WARMUP_PERIOD_DAYS,
             **params,
         )
         engine.run()
@@ -370,6 +372,7 @@ def run_walk_forward_optimization(
         print("\n" + "=" * 80)
         print(f"WFO FOLD {fold_num}")
         print("=" * 80)
+        clear_bayesian_priors()
         print(f"Training Period:  {train_start.date()} to {train_end.date()}")
         print(f"Testing Period:   {train_end.date()} to {test_end.date()}")
         print(f"Initial Capital:  ${fold_capital:,.2f}")
@@ -379,7 +382,7 @@ def run_walk_forward_optimization(
         train_mask = (timestamps >= train_start) & (timestamps < train_end)
         train_data = all_available_data[train_mask]
 
-        OOS_LOOKBACK_BUFFER = timedelta(days=1250)
+        OOS_LOOKBACK_BUFFER = timedelta(days=2000)
         oos_data_start = train_end - OOS_LOOKBACK_BUFFER
 
         if (
@@ -447,41 +450,42 @@ def run_walk_forward_optimization(
                     start_date=train_end.strftime("%Y-%m-%d"),
                     risk_on_symbols=config.RISK_ON_SYMBOLS,
                     risk_off_symbols=config.RISK_OFF_SYMBOLS,
+                    warmup_days=config.WARMUP_PERIOD_DAYS,
                     **opt_result.best_params,
                 )
                 oos_engine.run()
 
-                holdings_df = pd.DataFrame(oos_engine.portfolio.all_holdings)
+                oos_engine_results = oos_engine.get_results()
+
+                holdings_df = oos_engine_results["holdings"]
+
                 if not holdings_df.empty:
-                    oos_results = holdings_df.copy()
+                    initial_fold_val = holdings_df["total"].iloc[0]
+                    final_fold_val = holdings_df["total"].iloc[-1]
+                    fold_return = (final_fold_val / initial_fold_val) - 1
 
-                    if not oos_results.empty:
-                        initial_fold_val = oos_results["total"].iloc[0]
-                        final_fold_val = oos_results["total"].iloc[-1]
-                        fold_return = (final_fold_val / initial_fold_val) - 1
+                    fold_result["oos_initial_value"] = initial_fold_val
+                    fold_result["oos_final_value"] = final_fold_val
+                    fold_result["oos_return"] = fold_return
 
-                        fold_result["oos_initial_value"] = initial_fold_val
-                        fold_result["oos_final_value"] = final_fold_val
-                        fold_result["oos_return"] = fold_return
+                    print("\nOUT-OF-SAMPLE PERFORMANCE:")
+                    print("-" * 80)
+                    print(f"  Initial Value: ${initial_fold_val:,.2f}")
+                    print(f"  Final Value:   ${final_fold_val:,.2f}")
+                    print(f"  Return:        {fold_return:+.2%}")
+                    print(f"  New Capital:   ${final_fold_val:,.2f}")
+                    print("=" * 80 + "\n")
 
-                        print("\nOUT-OF-SAMPLE PERFORMANCE:")
-                        print("-" * 80)
-                        print(f"  Initial Value: ${initial_fold_val:,.2f}")
-                        print(f"  Final Value:   ${final_fold_val:,.2f}")
-                        print(f"  Return:        {fold_return:+.2%}")
-                        print(f"  New Capital:   ${final_fold_val:,.2f}")
-                        print("=" * 80 + "\n")
+                    scale_factor = fold_capital / initial_fold_val
+                    monetary_cols = ["cash", "total"] + [
+                        s for s in config.SYMBOLS if s in holdings_df.columns
+                    ]
+                    for col in monetary_cols:
+                        holdings_df[col] *= scale_factor
 
-                        scale_factor = fold_capital / initial_fold_val
-                        monetary_cols = ["cash", "total"] + [
-                            s for s in config.SYMBOLS if s in oos_results.columns
-                        ]
-                        for col in monetary_cols:
-                            oos_results[col] *= scale_factor
-
-                        all_oos_holdings.append(oos_results)
-                        all_oos_trades.extend(oos_engine.portfolio.all_trades)
-                        fold_capital = oos_results["total"].iloc[-1]
+                    all_oos_holdings.append(holdings_df)
+                    all_oos_trades.extend(oos_engine.portfolio.all_trades)
+                    fold_capital = holdings_df["total"].iloc[-1]
 
                 all_fold_results.append(fold_result)
 
@@ -560,11 +564,12 @@ def run_walk_forward_optimization(
         logging.error("[WFO] No successful folds. Returning empty results.")
         return {}
 
-    final_holdings = (
-        pd.concat(all_oos_holdings).reset_index(drop=True).set_index("timestamp")
-    )
+    final_holdings = pd.concat(all_oos_holdings)
     final_holdings["returns"] = final_holdings["total"].pct_change()
     final_trades = pd.DataFrame(all_oos_trades)
+    if not final_trades.empty:
+        wfo_trades_filename = "trade_details_wfo_run.csv"
+        final_trades.to_csv(wfo_trades_filename, index=False, encoding="utf-8-sig")
 
     logging.info(f"[WFO] Final combined out-of-sample results generated.")
     run_and_display_monte_carlo(final_holdings)
@@ -580,7 +585,9 @@ def run_walk_forward_optimization(
 def run_single_simple_backtest(
     all_available_data: pd.DataFrame, start_date: str = None
 ) -> Dict[str, Any]:
-    """Runs a single backtest using default parameters and returns a results dictionary."""
+    """
+    Runs a single backtest using default parameters and returns results with diagnostics.
+    """
     logging.info("--- [Backtester] Starting Single Backtest ---")
     params = strategy_config.get_current_strategy_params()
 
@@ -591,11 +598,15 @@ def run_single_simple_backtest(
         start_date=start_date,
         risk_on_symbols=config.RISK_ON_SYMBOLS,
         risk_off_symbols=config.RISK_OFF_SYMBOLS,
+        warmup_days=config.WARMUP_PERIOD_DAYS,
         **params,
     )
     engine.run()
 
-    holdings_df = create_equity_curve_dataframe(engine.portfolio.all_holdings)
+    results = engine.get_results()
+    holdings_df = results["holdings"]
+    diagnostics_log = results.get("diagnostics_log", [])
+
     if holdings_df.empty:
         logging.error("Single backtest produced no results.")
         return {}
@@ -605,11 +616,24 @@ def run_single_simple_backtest(
     )
     run_and_display_monte_carlo(holdings_df)
 
-    # FIXED: Return a dictionary with all necessary results
+    closed_trades_df = pd.DataFrame(engine.portfolio.all_trades)
+
+    if not closed_trades_df.empty:
+        trades_filename = "trade_details_single_run.csv"
+        closed_trades_df.to_csv(trades_filename, index=False, encoding="utf-8-sig")
+
+    generate_report(
+        holdings_df=holdings_df,
+        closed_trades_df=closed_trades_df,
+        initial_capital=config.INITIAL_CAPITAL,
+        diagnostics_log=diagnostics_log,
+    )
+
     return {
         "holdings": holdings_df,
         "trade_statistics": engine.portfolio.get_trade_statistics(),
-        "closed_trades": pd.DataFrame(engine.portfolio.all_trades),
+        "closed_trades": closed_trades_df,
+        "diagnostics_log": diagnostics_log,
     }
 
 
@@ -677,3 +701,24 @@ def run_and_display_monte_carlo(equity_curve: pd.DataFrame):
         logging.info("=" * 60)
     except Exception as e:
         logging.error(f"[Monte Carlo] Simulation failed: {e}")
+
+
+def clear_bayesian_priors(directory="./data/bayesian_priors"):
+    """Deletes all .json files in the priors directory to ensure a clean slate."""
+    import os
+    import glob
+
+    if os.path.exists(directory):
+        files = glob.glob(os.path.join(directory, "*.json"))
+        if not files:
+            print("Bayesian priors directory is already clean.")
+            return
+
+        for f in files:
+            try:
+                os.remove(f)
+            except OSError as e:
+                logging.error(f"Error removing prior file {f}: {e}")
+        print(f"Cleared {len(files)} file(s) from the Bayesian priors directory.")
+    else:
+        print("Bayesian priors directory does not exist, no cleanup needed.")

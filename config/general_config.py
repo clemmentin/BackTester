@@ -1,8 +1,11 @@
 import os
-from datetime import date
 
+# ============================================================================
+# TRADING UNIVERSE CONFIGURATION
+# ============================================================================
+
+# Core momentum stocks - high profit factor performers
 CORE_MOMENTUM_UNIVERSE = [
-    # S-Tier Winners (Top Profit Generators)
     "DDOG",
     "CRWD",
     "FTNT",
@@ -11,7 +14,6 @@ CORE_MOMENTUM_UNIVERSE = [
     "TGT",
     "SNOW",
     "COP",
-    # A-Tier Winners (Consistent Strong Performers)
     "LRCX",
     "ETN",
     "WM",
@@ -29,7 +31,6 @@ CORE_MOMENTUM_UNIVERSE = [
     "NVDA",
     "TSLA",
     "AMD",
-    # Solid Performers with Good Profit Factor
     "LOW",
     "DE",
     "INTU",
@@ -43,65 +44,53 @@ CORE_MOMENTUM_UNIVERSE = [
     "TJX",
     "GILD",
     "JPM",
-    "VOO",  # VOO (like SPY) is kept for benchmark/diversification
+    "VOO",
 ]
 
-# Sub-Group 2: SELECT CYCLICAL / REVERSAL UNIVERSE
-# These stocks showed moderate success. They are often cyclical and may be good
-# candidates for the reversal alpha module, but require careful management.
-# This list is heavily curated from the original.
+# Cyclical stocks for mean-reversion strategies
 SELECT_CYCLICAL_REVERSAL = [
-    "AAPL",  # Profitable, but lower win-rate. Kept for its market influence.
-    "AMZN",  # Strong long-term performer.
-    "MSFT",  # Core tech holding.
-    "GOOGL",  # Core tech holding.
-    "UNH",  # Leader in healthcare.
-    "JNJ",  # Defensive qualities, moderately positive PnL.
-    "V",  # Strong financials performer.
+    "AAPL",
+    "AMZN",
+    "MSFT",
+    "GOOGL",
+    "UNH",
+    "JNJ",
+    "V",
     "MA",
     "HD",
-    "LLY",  # Positive PnL, important sector.
+    "LLY",
     "PYPL",
     "RTX",
 ]
 
+# Safe-haven assets for defensive positioning
+PRIMARY_RISK_OFF_UNIVERSE = ["GLD", "KO", "PG", "SPY"]
 
-# --- PRIMARY RISK-OFF UNIVERSE ---
-# Drastically simplified. The model is not effective at trading most defensive ETFs.
-# We retain only the most essential, uncorrelated safe-haven assets.
-PRIMARY_RISK_OFF_UNIVERSE = [
-    "GLD",  # Gold: The primary safe haven. Showed positive PnL.
-    "KO",  # Coca-Cola: Showed surprisingly high Profit Factor in limited trades.
-    "PG",  # Procter & Gamble: Also showed high Profit Factor.
-]
-
-
-# --- DERIVED UNIVERSES ---
-# This section automatically combines the lists above. You don't need to change it.
+# Auto-derived universes
 PRIMARY_RISK_ON_UNIVERSE = list(set(CORE_MOMENTUM_UNIVERSE + SELECT_CYCLICAL_REVERSAL))
 RISK_ON_SYMBOLS = list(set(PRIMARY_RISK_ON_UNIVERSE))
 RISK_OFF_SYMBOLS = list(set(PRIMARY_RISK_OFF_UNIVERSE))
 SYMBOLS = list(set(RISK_ON_SYMBOLS + RISK_OFF_SYMBOLS))
-
-# For compatibility with UnifiedDataManager (fetches data for individual stocks)
 INDIVIDUAL_STOCKS = list(set(RISK_ON_SYMBOLS + RISK_OFF_SYMBOLS) - {"VOO", "GLD"})
 # ============================================================================
 # DATA FETCHING CONFIGURATION
 # ============================================================================
 
-# Date ranges
-DATA_START_DATE = "1990-01-01"  # Historical data fetch start
-BACKTEST_START_DATE = "2000-01-01"  # Strategy backtest start
-BACKTEST_END_DATE = "2025-08-01"  # Strategy backtest end
-WARMUP_PERIOD_DAYS = 252  # Technical indicator warmup
-GLOBAL_RANDOM_SEED = 42  # For reproducibility
-INITIAL_CAPITAL = 100000.0  # Initial capital for backtests
+# Backtest date range
+DATA_START_DATE = "1990-01-01"
+BACKTEST_START_DATE = "2005-01-01"
+BACKTEST_END_DATE = "2025-10-22"
+WARMUP_PERIOD_DAYS = 365
 
-# Data source toggles
-ENABLE_FUNDAMENTAL_DATA = False  # Deprecated for 3-factor model
-ENABLE_MACRO_DATA = True  # NEW: Enable for enhanced market detection
+# Global settings
+GLOBAL_RANDOM_SEED = 42
+INITIAL_CAPITAL = 100000.0
 
-# Cache and storage
+# Data source flags
+ENABLE_FUNDAMENTAL_DATA = False
+ENABLE_MACRO_DATA = True
+
+# Cache directory
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cache")
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
@@ -111,17 +100,14 @@ PROCESSED_DATA_CACHE_PATH = os.path.join(CACHE_DIR, "all_processed_data.parquet"
 # PERFORMANCE AND CACHING
 # ============================================================================
 
-GARCH_LOOKBACK_DAYS = 1000  # Number of days for fitting the GARCH model.
-BETA_CACHE_MAX_AGE_DAYS = (
-    20  # How many days to keep a calculated beta value before re-calculating.
-)
-BETA_CACHE_MAX_SIZE = 100  # The maximum number of beta sets to store in memory.
+GARCH_LOOKBACK_DAYS = 1000
+BETA_CACHE_MAX_AGE_DAYS = 20
+BETA_CACHE_MAX_SIZE = 100
 
 # ============================================================================
-# MACRO ECONOMIC INDICATORS (Data Layer Only)
+# MACRO ECONOMIC INDICATORS
 # ============================================================================
 
-# Define available macro indicators organized by category
 MACRO_INDICATORS = {
     "interest_rates": {
         "DFF": "Federal Funds Rate",
@@ -151,7 +137,6 @@ MACRO_INDICATORS = {
     },
 }
 
-# Flatten for fetcher (all available indicators)
 ACTIVE_MACRO_INDICATORS = {
     **MACRO_INDICATORS["interest_rates"],
     **MACRO_INDICATORS["inflation"],
@@ -159,9 +144,7 @@ ACTIVE_MACRO_INDICATORS = {
     **MACRO_INDICATORS["economic_activity"],
 }
 
-# Update frequency for MacroDataFetcher
 MACRO_INDICATOR_FREQUENCY_MAP = {
-    # High frequency (daily/weekly)
     "DFF": "high_frequency",
     "DGS10": "high_frequency",
     "DGS2": "high_frequency",
@@ -171,7 +154,6 @@ MACRO_INDICATOR_FREQUENCY_MAP = {
     "VIXCLS": "high_frequency",
     "WALCL": "high_frequency",
     "T5YIE": "high_frequency",
-    # Monthly
     "CPIAUCSL": "monthly",
     "CPILFESL": "monthly",
     "UNRATE": "monthly",
@@ -180,7 +162,6 @@ MACRO_INDICATOR_FREQUENCY_MAP = {
     "HOUST": "monthly",
     "M2SL": "monthly",
     "DFEDTARU": "monthly",
-    # Quarterly
     "GDP": "quarterly",
 }
 
@@ -188,9 +169,9 @@ MACRO_INDICATOR_FREQUENCY_MAP = {
 # DATA VALIDATION
 # ============================================================================
 
-MIN_DATA_POINTS = 252  # Minimum trading days for valid backtest
-MIN_SYMBOLS_REQUIRED = 10  # Minimum symbols needed
-MAX_MISSING_DATA_PCT = 0.1  # Max allowable missing data
+MIN_DATA_POINTS = 252
+MIN_SYMBOLS_REQUIRED = 10
+MAX_MISSING_DATA_PCT = 0.1
 
 # ============================================================================
 # LOGGING

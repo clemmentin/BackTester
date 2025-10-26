@@ -124,7 +124,10 @@ class AlphaNormalizer:
             return np.ones(len(symbols))
 
         # 5. Calculate covariance and beta in a single vectorized step.
-        covariance_vector = stock_returns.cov(market_returns)
+        # Note: DataFrame.cov does not accept a Series as "other" argument; build covariance matrix instead.
+        cols = list(dict.fromkeys(valid_symbols + ["SPY"]))
+        cov_matrix = returns[cols].cov()
+        covariance_vector = cov_matrix.loc[valid_symbols, "SPY"]
         beta_vector = covariance_vector / market_variance
         beta_map = beta_vector.to_dict()
 

@@ -14,11 +14,9 @@ class StopInfo:
     stop_price: float
     highest_price: float
     trailing_activated: bool
-    # NEW: Add fields to track profit protection status
-    profit_level_achieved: int  # Tracks the highest profit level achieved (by its index in the config list)
-    current_trail_distance: (
-        float  # The currently active trailing stop distance percentage
-    )
+    # MODIFIED: Added fields to track profit protection status.
+    profit_level_achieved: int
+    current_trail_distance: float
 
 
 @dataclass
@@ -26,7 +24,7 @@ class StopSignal:
     """Represents a signal to exit a position due to a stop being triggered."""
 
     symbol: str
-    action: str  # e.g., 'exit'
+    action: str
     reason: str
     current_price: float
     stop_price: float
@@ -38,7 +36,6 @@ class StopManager:
     def __init__(self, config: Dict):
         self.logger = logging.getLogger(__name__)
 
-        # Load base configuration
         self.enabled = config.get("enabled", True)
         self.fixed_stop_pct = config.get("fixed_stop_loss", 0.10)
         self.trailing_activation_pct = config.get("trailing_stop_activation", 0.10)
@@ -47,24 +44,32 @@ class StopManager:
         # NEW: Load profit protection configuration
         self.pp_config = config.get("profit_protection", {})
         self.pp_enabled = self.pp_config.get("enabled", False)
-        # Sort levels by the 'profit' threshold to ensure they are checked in the correct order
+        # Sort levels by profit threshold to ensure they are checked in order.
         self.pp_levels = sorted(
             self.pp_config.get("levels", []), key=lambda x: x["profit"]
         )
 
-        # In-memory tracking for all active positions
         self.stops: Dict[str, StopInfo] = {}
 
         self.logger.info(
             f"StopManager Initialized. Profit Protection Enabled: {self.pp_enabled} with {len(self.pp_levels)} levels."
         )
 
-    def add_position(self, symbol: str, entry_price: float):
-        """Adds a new position to be tracked by the stop manager."""
+    def add_position(
+        self, symbol: str, entry_price: float, stop_loss_pct: Optional[float] = None
+    ):
+        """Adds a new position to be tracked, using a dynamic or fixed stop loss."""
         if not self.enabled:
             return
 
-        initial_stop = entry_price * (1 - self.fixed_stop_pct)
+        # Use the dynamic stop_loss_pct if provided, otherwise fall back to the fixed one.
+        stop_pct_to_use = (
+            stop_loss_pct
+            if stop_loss_pct is not None and stop_loss_pct > 0
+            else self.fixed_stop_pct
+        )
+
+        initial_stop = entry_price * (1 - stop_pct_to_use)
 
         self.stops[symbol] = StopInfo(
             symbol=symbol,
@@ -72,27 +77,22 @@ class StopManager:
             stop_price=initial_stop,
             highest_price=entry_price,
             trailing_activated=False,
-            # NEW: Initialize new fields
-            profit_level_achieved=-1,  # -1 means no profit level has been reached yet
-            current_trail_distance=self.base_trailing_distance,  # Start with the base trailing distance
+            profit_level_achieved=-1,  # Start at -1, meaning no level achieved
+            current_trail_distance=self.base_trailing_distance,
         )
 
-        self.logger.debug(
-            f"Stop added: {symbol} entry=${entry_price:.2f} stop=${initial_stop:.2f}"
+        self.logger.info(
+            f"Stop added: {symbol} entry=${entry_price:.2f}, stop=${initial_stop:.2f} ({stop_pct_to_use:.2%})"
         )
 
     def update_stops(
         self, price_data: Dict[str, float], timestamp: datetime
     ) -> List[StopSignal]:
-        """
-        Updates all stops based on the latest price data and generates exit signals if triggered.
-        This is the main logic loop, executed on each time step.
-        """
+        """Updates all stops based on the latest price data and generates exit signals."""
         if not self.enabled:
             return []
 
         signals = []
-        # Create a copy of keys to iterate over, as the dictionary may be modified if a stop is hit
         symbols_to_check = list(self.stops.keys())
 
         for symbol in symbols_to_check:
@@ -102,17 +102,14 @@ class StopManager:
             stop_info = self.stops[symbol]
             current_price = price_data[symbol]
 
-            # --- 1. Calculate current gain percentage ---
             current_gain = (current_price / stop_info.entry_price) - 1
 
-            # --- 2. Update the highest price seen so far for the position ---
             if current_price > stop_info.highest_price:
                 stop_info.highest_price = current_price
 
-            # --- 3. (Core Logic) Check and apply tiered profit protection ---
+            # Check and apply tiered profit protection
             if self.pp_enabled:
                 for i, level in enumerate(self.pp_levels):
-                    # Check if we've reached a new profit level that is higher than any previously achieved
                     if (
                         current_gain >= level["profit"]
                         and i > stop_info.profit_level_achieved
@@ -120,16 +117,13 @@ class StopManager:
                         self.logger.info(
                             f"Profit Protection Level {i + 1} activated for {symbol} at {current_gain:.1%} gain."
                         )
-                        stop_info.profit_level_achieved = (
-                            i  # Update the highest level reached
-                        )
-
+                        stop_info.profit_level_achieved = i
                         action = level["action"]
+
                         if action == "lock_in":
                             lock_in_price = stop_info.entry_price * (
                                 1 + level["lock_in_pct"]
                             )
-                            # Raise the stop price to the new lock-in level (but never lower it)
                             stop_info.stop_price = max(
                                 stop_info.stop_price, lock_in_price
                             )
@@ -138,15 +132,13 @@ class StopManager:
                             )
 
                         elif action == "trail":
-                            # Update the trailing distance to the new percentage defined in this level
                             stop_info.current_trail_distance = level["trail_pct"]
-                            # Ensure the trailing stop mechanism is activated
                             stop_info.trailing_activated = True
                             self.logger.info(
                                 f"  -> Action: Trail. Trail distance for {symbol} updated to {stop_info.current_trail_distance:.1%}"
                             )
 
-            # --- 4. Check and apply the base trailing stop if not already activated by profit protection ---
+            # Check and apply the base trailing stop if not already activated
             if not stop_info.trailing_activated:
                 gain_for_trailing = (
                     stop_info.highest_price / stop_info.entry_price
@@ -157,45 +149,42 @@ class StopManager:
                         f"{symbol}: Base trailing stop activated at {gain_for_trailing:.1%} gain"
                     )
 
-            # --- 5. Update the stop price based on the current trailing logic ---
+            # Update the stop price based on current trailing logic
             if stop_info.trailing_activated:
                 new_stop_price = stop_info.highest_price * (
                     1 - stop_info.current_trail_distance
                 )
-                # The stop price can only go up, never down
                 stop_info.stop_price = max(stop_info.stop_price, new_stop_price)
 
-            # --- 6. Final check to see if the current price has breached the stop price ---
+            # Final check to see if the current price has breached the stop price
             if current_price <= stop_info.stop_price:
                 reason = (
-                    f"Profit stop triggered at ${stop_info.stop_price:.2f}"
+                    "Profit protection"
                     if stop_info.trailing_activated
                     or stop_info.profit_level_achieved > -1
-                    else f"Initial stop triggered at ${stop_info.stop_price:.2f}"
+                    else "Initial stop"
                 )
-
                 signals.append(
                     StopSignal(
                         symbol=symbol,
                         action="exit",
-                        reason=reason,
+                        reason=f"{reason} triggered at ${stop_info.stop_price:.2f}",
                         current_price=current_price,
                         stop_price=stop_info.stop_price,
                     )
                 )
-
         return signals
 
     def remove_position(self, symbol: str):
-        """Removes a position from the stop tracker (e.g., after it's sold)."""
+        """Removes a position from the stop tracker after it's sold."""
         if symbol in self.stops:
             del self.stops[symbol]
-            self.logger.debug(f"Stop tracker removed: {symbol}")
+            self.logger.debug(f"Stop tracker removed for: {symbol}")
 
     def get_stop_info(self, symbol: str) -> Optional[StopInfo]:
-        """Retrieves the current stop information for a single symbol."""
+        """Retrieves stop information for a single symbol."""
         return self.stops.get(symbol)
 
     def get_all_stops(self) -> Dict[str, float]:
-        """Returns a dictionary of all tracked symbols and their current stop prices."""
+        """Returns a dictionary of all tracked symbols and their stop prices."""
         return {s: info.stop_price for s, info in self.stops.items()}

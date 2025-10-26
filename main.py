@@ -61,13 +61,16 @@ def print_configuration_summary():
         engine_params = params.get("alpha_engine", {})
         ic_enabled = engine_params.get("ic_enabled", True)
 
-        print("\n--- Alpha Engine (3-Factor Model) ---")
+        print("\n--- Alpha Engine  ---")
         print(f"  Price Weight            : {engine_params.get('price_weight', 0):.0%}")
         print(
             f"  Reversal Weight         : {engine_params.get('reversal_weight', 0):.0%}"
         )
         print(
             f"  Momentum Weight         : {engine_params.get('momentum_weight', 0):.0%}"
+        )
+        print(
+            f"  Liquidity Weight        : {engine_params.get('liquidity_weight', 0):.0%}"
         )
         print(f"  Dynamic IC Weighting    : {'Enabled' if ic_enabled else 'Disabled'}")
 
@@ -121,6 +124,7 @@ def run_full_backtest(all_data: pd.DataFrame):
     """Orchestrates the backtest and subsequent performance analysis."""
     print("\n[PHASE 2] Backtest Execution")
     print("-" * 80)
+    manage_ml_data_file(mode="archive")
     if config.WFO_ENABLED:
         logging.info("WFO mode enabled. Starting Walk-Forward Optimization...")
         backtest_results = run_walk_forward_optimization(
@@ -138,17 +142,21 @@ def run_full_backtest(all_data: pd.DataFrame):
         )
         return
 
-    print("\n[PHASE 3] Performance Analysis & Reporting")
-    print("-" * 80)
-    from analysis.runner import (
-        generate_report,
-    )
 
-    generate_report(
-        backtest_results["holdings"],
-        backtest_results["closed_trades"],
-        config.INITIAL_CAPITAL,
-    )
+def manage_ml_data_file(mode="archive"):
+    filepath = "./data/ml_training_data.csv"
+    if os.path.exists(filepath):
+        if mode == "archive":
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_path = f"./data/archive/ml_training_data_{timestamp}.csv"
+
+            os.makedirs("./data/archive", exist_ok=True)
+
+            os.rename(filepath, archive_path)
+            print(f"Archived existing ML data file to: {archive_path}")
+        elif mode == "delete":
+            os.remove(filepath)
+            print(f"Deleted existing ML data file: {filepath}")
 
 
 def main() -> int:

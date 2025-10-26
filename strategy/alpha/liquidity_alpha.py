@@ -6,44 +6,90 @@ from strategy.contracts import RawAlphaSignal
 
 
 class LiquidityAlphaModule:
-    """
-    Generates alpha signals based on liquidity and volume anomalies.
-
-    This refactored version corrects the interpretation of several sub-factors
-    based on historical data analysis, focusing on:
-    1. Volume Momentum: Rising volume as a sign of growing interest.
-    2. OBV (On-Balance Volume): Correctly interpreting its trend and divergence signals.
-    3. Illiquidity Premium: Capturing the finding that less liquid stocks (higher Amihud)
-       sometimes show better future performance.
-    """
-
     def __init__(self, **kwargs):
         self.logger = logging.getLogger(__name__)
         liquidity_params = kwargs.get("liquidity_alpha_params", {})
 
-        # --- Sub-Factor Calculation Parameters ---
-        self.volume_lookback = liquidity_params.get("volume_lookback", 20)
-        self.amihud_lookback = liquidity_params.get("amihud_lookback", 20)
-        self.obv_signal_period = liquidity_params.get("obv_signal_period", 10)
-
-        # --- Toggles for enabling/disabling sub-factors ---
-        self.use_amihud = liquidity_params.get("use_amihud", True)
-        self.use_obv = liquidity_params.get("use_obv", True)
-
-        # --- Quality & Filtering Parameters ---
-        self.min_confidence = liquidity_params.get("min_confidence", 0.30)
-        self.min_avg_dollar_volume = liquidity_params.get(
-            "min_avg_dollar_volume", 1_000_000
+        # Try flat parameters first (from optimizer), then nested dict
+        self.volume_lookback = kwargs.get(
+            "volume_lookback", liquidity_params.get("volume_lookback", 20)
         )
-        self.volume_spike_threshold = liquidity_params.get(
-            "volume_spike_threshold", 2.0  # Increased threshold for a clearer signal
+        self.amihud_lookback = kwargs.get(
+            "amihud_lookback", liquidity_params.get("amihud_lookback", 20)
+        )
+        self.min_confidence = kwargs.get(
+            "min_confidence", liquidity_params.get("min_confidence", 0.30)
+        )
+        self.min_avg_dollar_volume = kwargs.get(
+            "min_avg_dollar_volume",
+            liquidity_params.get("min_avg_dollar_volume", 1_000_000),
+        )
+
+        self.regime_multipliers = kwargs.get(
+            "regime_multipliers",
+            liquidity_params.get(
+                "regime_multipliers",
+                {
+                    "crisis": 1.5,
+                    "bear": 1.1,
+                    "volatile": 1.1,
+                    "normal": 1.0,
+                    "bull": 0.95,
+                    "strong_bull": 0.75,
+                },
+            ),
+        )
+
+        # (MODIFIED) Load scoring and filtering parameters
+        self.score_threshold = kwargs.get(
+            "score_threshold", liquidity_params.get("score_threshold", 0.12)
+        )
+        self.volume_ratio_filter_threshold = kwargs.get(
+            "volume_ratio_filter_threshold",
+            liquidity_params.get("volume_ratio_filter_threshold", 2.5),
+        )
+
+        self.high_liquidity_percentile = kwargs.get(
+            "high_liquidity_percentile",
+            liquidity_params.get("high_liquidity_percentile", 0.90),
+        )
+        self.good_liquidity_percentile = kwargs.get(
+            "good_liquidity_percentile",
+            liquidity_params.get("good_liquidity_percentile", 0.75),
+        )
+        self.poor_liquidity_percentile = kwargs.get(
+            "poor_liquidity_percentile",
+            liquidity_params.get("poor_liquidity_percentile", 0.25),
+        )
+        self.low_liquidity_percentile = kwargs.get(
+            "low_liquidity_percentile",
+            liquidity_params.get("low_liquidity_percentile", 0.10),
+        )
+
+        # (MODIFIED) Load confidence calculation parameters
+        self.confidence_base = kwargs.get(
+            "confidence_base", liquidity_params.get("confidence_base", 0.35)
+        )
+        self.confidence_extremeness_mult = kwargs.get(
+            "confidence_extremeness_mult",
+            liquidity_params.get("confidence_extremeness_mult", 0.80),
+        )
+        self.confidence_extreme_threshold = kwargs.get(
+            "confidence_extreme_threshold",
+            liquidity_params.get("confidence_extreme_threshold", 0.85),
+        )
+        self.confidence_low_threshold = kwargs.get(
+            "confidence_low_threshold",
+            liquidity_params.get("confidence_low_threshold", 0.15),
+        )
+        self.confidence_extreme_bonus = kwargs.get(
+            "confidence_extreme_bonus",
+            liquidity_params.get("confidence_extreme_bonus", 0.15),
         )
 
         self.logger.info(
-            f"LiquidityAlpha [Refactored] initialized: "
-            f"Amihud={'ON' if self.use_amihud else 'OFF'}, "
-            f"OBV={'ON' if self.use_obv else 'OFF'}, "
-            f"min_dollar_vol=${self.min_avg_dollar_volume:,.0f}"
+            f"LiquidityAlpha [Regime-Aware] initialized: "
+            f"Using regime multipliers and fixed components."
         )
 
     def calculate_batch_liquidity_signals(
@@ -53,21 +99,11 @@ class LiquidityAlphaModule:
         timestamp: pd.Timestamp,
         market_regime: str = "NORMAL",
     ) -> Dict[str, RawAlphaSignal]:
-        """
-        Main function to generate liquidity-based alpha signals for all symbols.
-        """
-        # --- 1. Data Validation and Preparation ---
         if prices.empty or volumes.empty or timestamp not in prices.index:
-            self.logger.debug(f"Insufficient data at {timestamp}")
             return {}
 
-        required_len = (
-            max(self.volume_lookback, self.amihud_lookback, self.obv_signal_period) + 10
-        )
+        required_len = max(self.volume_lookback, self.amihud_lookback) + 10
         if len(prices) < required_len:
-            self.logger.debug(
-                f"Need {required_len} periods, have {len(prices)} at {timestamp}"
-            )
             return {}
 
         end_loc = prices.index.get_loc(timestamp)
@@ -75,7 +111,6 @@ class LiquidityAlphaModule:
         price_slice = prices.iloc[start_loc : end_loc + 1]
         volume_slice = volumes.iloc[start_loc : end_loc + 1]
 
-        # --- 2. Pre-filter illiquid stocks to save computation ---
         avg_dollar_volume = (price_slice * volume_slice).mean()
         valid_symbols = avg_dollar_volume[
             avg_dollar_volume >= self.min_avg_dollar_volume
@@ -86,166 +121,124 @@ class LiquidityAlphaModule:
         price_slice = price_slice[valid_symbols]
         volume_slice = volume_slice[valid_symbols]
 
-        # --- 3. Calculate All Sub-Factor Components ---
         df = pd.DataFrame(index=price_slice.columns)
-        df = self._calculate_volume_metrics(volume_slice, df)
         df = self._calculate_volume_price_synergy(price_slice, volume_slice, df)
-        if self.use_obv:
-            df = self._calculate_obv_signals(price_slice, volume_slice, df)
-        if self.use_amihud:
-            df = self._calculate_amihud_liquidity(price_slice, volume_slice, df)
-
-        # --- 4. Generate Composite Score and Confidence ---
-        df = self._generate_composite_score(df)
+        df = self._calculate_amihud_liquidity(price_slice, volume_slice, df)
+        df = self._generate_composite_score(df, market_regime)
         df = self._calculate_confidence(df)
 
-        # --- 5. Final Filtering and Signal Generation ---
+        # (MODIFIED) Use parameters for filtering
+        volume_ratio_filter = (
+            df.get("up_down_volume_ratio", 1.0) < self.volume_ratio_filter_threshold
+        )
         final_df = df[
-            (df["confidence"] >= self.min_confidence) & (abs(df["score"]) >= 0.15)
+            (df["confidence"] >= self.min_confidence)
+            & (abs(df["score"]) >= self.score_threshold)
+            & volume_ratio_filter
         ].copy()
 
         if final_df.empty:
+            self.logger.info(
+                f"No liquidity signals passed the final filter for {timestamp.date()}. "
+                f"Initial candidates: {len(df)}"
+            )
             return {}
 
-        # Generate signal objects for stocks that passed the filter
+        self.logger.info(
+            f"Liquidity signals: {len(final_df)}/{len(df)} passed filters."
+        )
+
         return {
             symbol: RawAlphaSignal(
                 symbol=symbol,
                 score=float(np.clip(row["score"], -1.0, 1.0)),
                 confidence=float(np.clip(row["confidence"], 0.30, 0.90)),
+                expected_value=0.0,
                 components={
-                    "volume_momentum": float(row.get("volume_momentum", 0)),
-                    "up_down_volume_ratio": float(row.get("up_down_volume_ratio", 0)),
-                    "obv_trend": float(row.get("obv_trend", 0)),
-                    "obv_price_divergence": float(row.get("obv_price_divergence", 0)),
                     "liquidity_percentile": float(row.get("liquidity_percentile", 0.5)),
-                    "composite_score": float(row.get("composite_score", 0)),
+                    "liquidity_composite_score": float(row.get("composite_score", 0)),
+                    "liquidity_volume_ratio_filter": float(
+                        row.get("up_down_volume_ratio", 0)
+                    ),
                 },
             )
             for symbol, row in final_df.iterrows()
         }
 
-    def _calculate_volume_metrics(
-        self, volume_slice: pd.DataFrame, df: pd.DataFrame
-    ) -> pd.DataFrame:
-        """Calculates metrics related to volume changes and momentum."""
-        # Volume ratio vs recent average (for spike detection)
-        avg_volume = (
-            volume_slice.iloc[:-1].rolling(window=self.volume_lookback).mean().iloc[-1]
-        )
-        df["volume_ratio"] = volume_slice.iloc[-1] / (avg_volume + 1)
-
-        # Volume momentum: trend of recent volume vs longer-term volume
-        recent_avg_vol = volume_slice.iloc[-5:].mean()
-        past_avg_vol = volume_slice.iloc[-self.volume_lookback : -5].mean()
-        df["volume_momentum"] = (recent_avg_vol / (past_avg_vol + 1)) - 1.0
-        return df
-
     def _calculate_volume_price_synergy(
         self, price_slice: pd.DataFrame, volume_slice: pd.DataFrame, df: pd.DataFrame
     ) -> pd.DataFrame:
-        """Calculates if more volume occurs on up days vs down days."""
         price_changes = price_slice.pct_change().iloc[-self.volume_lookback :]
         volumes_in_period = volume_slice.iloc[-self.volume_lookback :]
-
         up_mask = price_changes > 0
         down_mask = price_changes < 0
-
         avg_up_volume = (volumes_in_period * up_mask).sum() / (up_mask.sum() + 1)
         avg_down_volume = (volumes_in_period * down_mask).sum() / (down_mask.sum() + 1)
-
         df["up_down_volume_ratio"] = avg_up_volume / (avg_down_volume + 1)
-        return df
-
-    def _calculate_obv_signals(
-        self, price_slice: pd.DataFrame, volume_slice: pd.DataFrame, df: pd.DataFrame
-    ) -> pd.DataFrame:
-        """Calculates On-Balance-Volume (OBV) trend and divergence."""
-        price_direction = np.sign(price_slice.diff().fillna(0))
-        obv = (price_direction * volume_slice).cumsum()
-
-        # OBV trend: a measure of recent OBV change
-        obv_change = obv.iloc[-1] / (obv.iloc[-self.obv_signal_period] + 1e-9) - 1.0
-        df["obv_trend"] = obv_change
-
-        # OBV-Price divergence: does OBV confirm the recent price trend?
-        price_change = (
-            price_slice.iloc[-1] / price_slice.iloc[-self.obv_signal_period] - 1.0
-        )
-        df["obv_price_divergence"] = obv_change - price_change
         return df
 
     def _calculate_amihud_liquidity(
         self, price_slice: pd.DataFrame, volume_slice: pd.DataFrame, df: pd.DataFrame
     ) -> pd.DataFrame:
-        """Calculates Amihud illiquidity measure."""
         returns = price_slice.pct_change().abs()
         dollar_volumes = price_slice * volume_slice
-
-        # Amihud = average(|return| / $volume) over a period. Higher means MORE illiquid.
         amihud_illiquidity = (
             (returns / (dollar_volumes + 1e-9))
             .rolling(window=self.amihud_lookback)
             .mean()
             .iloc[-1]
         )
-
-        # We rank illiquidity. A higher percentile means the stock is MORE illiquid than its peers.
         df["liquidity_percentile"] = amihud_illiquidity.rank(pct=True)
         return df
 
-    def _generate_composite_score(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Combines all sub-factors into a final score, respecting the findings from data analysis.
-        """
-        # --- 1. Isolate the only valuable signal ---
+    def _generate_composite_score(
+        self, df: pd.DataFrame, market_regime: str
+    ) -> pd.DataFrame:
+        if "liquidity_percentile" not in df.columns:
+            df["score"] = 0.0
+            df["composite_score"] = 0.0
+            return df
 
-        liquidity_quality_score = (df.get("liquidity_percentile", 0.5) - 0.5) * 2.0
+        liquidity_pct = df["liquidity_percentile"]
 
-        # --- 2. Define weights to reflect this finding ---
-        weights = {
-            "volume_momentum": 0.025,
-            "pv_synergy": 0.0,
-            "obv_trend": 0.025,
-            "obv_divergence": 0.05,
-            "liquidity_quality": 0.90,
-        }
-
-        # --- 3. Calculate the weighted average ---
-
-        volume_momentum_score = np.tanh(df.get("volume_momentum", 0.0))
-        pv_synergy_score = np.tanh((df.get("up_down_volume_ratio", 1.0) - 1.0) * 2.0)
-        obv_trend_score = np.tanh(df.get("obv_trend", 0.0))
-        obv_divergence_score = np.tanh(df.get("obv_price_divergence", 0.0))
-
-        df["composite_score"] = (
-            liquidity_quality_score * weights["liquidity_quality"]
-            + volume_momentum_score * weights["volume_momentum"]
-            + pv_synergy_score * weights["pv_synergy"]
-            + obv_trend_score * weights["obv_trend"]
-            + obv_divergence_score * weights["obv_divergence"]
+        # (MODIFIED) Scoring logic using parameters from config
+        liquidity_quality_score = np.select(
+            [
+                liquidity_pct > self.high_liquidity_percentile,
+                liquidity_pct > self.good_liquidity_percentile,
+                liquidity_pct < self.poor_liquidity_percentile,
+                liquidity_pct < self.low_liquidity_percentile,
+            ],
+            [
+                0.60 + (liquidity_pct - self.high_liquidity_percentile) * 4.0,
+                0.35 + (liquidity_pct - self.good_liquidity_percentile) * 1.67,
+                -0.35 + (liquidity_pct - self.poor_liquidity_percentile) * 1.67,
+                -0.60 + (liquidity_pct - self.low_liquidity_percentile) * 4.0,
+            ],
+            default=0.0,
         )
 
-        # The composite_score is now our final score, clipped to the standard [-1, 1] range.
-        df["score"] = df["composite_score"].clip(-1.0, 1.0)
+        df["composite_score"] = np.clip(liquidity_quality_score, -1.0, 1.0)
+        regime_mult = self.regime_multipliers.get(market_regime.lower(), 1.0)
+        df["score"] = df["composite_score"] * regime_mult
+
         return df
 
     def _calculate_confidence(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Calculates signal confidence based on agreement and strength of components.
-        """
-        # Base confidence on the magnitude of the final score
-        base_confidence = 0.35 + abs(df["score"]) * 0.30
+        if "liquidity_percentile" not in df.columns:
+            df["confidence"] = 0.0
+            return df
 
-        # Add a bonus for a significant volume spike, as it indicates high interest
-        volume_spike_bonus = (df["volume_ratio"] > self.volume_spike_threshold) * 0.15
+        liquidity_pct = df["liquidity_percentile"]
+        extremeness = abs(liquidity_pct - 0.5)
 
-        # Add a bonus for very high illiquidity, as this is a core part of the refactored signal
-        liquidity_bonus = (df.get("liquidity_percentile", 0.5) > 0.85) * 0.10
-
-        # Combine and clip to the final confidence range
-        df["confidence"] = (
-            base_confidence + volume_spike_bonus + liquidity_bonus
-        ).clip(0.30, 0.90)
-
+        # (MODIFIED) Confidence calculation using parameters
+        base_confidence = (
+            self.confidence_base + extremeness * self.confidence_extremeness_mult
+        )
+        extreme_bonus = (
+            (liquidity_pct > self.confidence_extreme_threshold)
+            | (liquidity_pct < self.confidence_low_threshold)
+        ) * self.confidence_extreme_bonus
+        df["confidence"] = np.clip(base_confidence + extreme_bonus, 0.30, 0.90)
         return df

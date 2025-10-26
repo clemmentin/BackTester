@@ -9,26 +9,21 @@ from .general_config import (
     GLOBAL_RANDOM_SEED,
 )
 
-# Import from strategy_config.py
 from .strategy_config import (
     HYBRID_DUAL_PARAMS,
-    ALPHA_UNIFIED_PARAMS,
     WFO_ENABLED,
     WFO_TEST_PERIOD,
     WFO_TRAIN_PERIOD,
     get_current_strategy_params,
     CURRENT_STRATEGY,
+    OPTIMIZATION_PARAMS,
 )
 
-# Import from trading_parameters.py
 from .trading_parameters import RISK_PARAMS, TRADING_PARAMS
 
 
 class ConfigRegistry:
-    """
-    Central registry for accessing configuration parameters.
-    Automatically routes requests to the correct config file.
-    """
+    """Central registry for accessing configuration parameters"""
 
     @staticmethod
     def get_strategy_param(section: str, key: str = None, default=None):
@@ -41,9 +36,7 @@ class ConfigRegistry:
         return section_data.get(key, default)
 
     @staticmethod
-    def get_trading_param(
-        category: str, section: str = None, key: str = None, default=None
-    ):
+    def get_trading_param(category: str, section: str = None, key: str = None, default=None):
         config_map = {"RISK_PARAMS": RISK_PARAMS, "TRADING_PARAMS": TRADING_PARAMS}
         if category not in config_map:
             return default
@@ -74,18 +67,13 @@ class ConfigRegistry:
                 return value
         return default
 
-
 config = ConfigRegistry()
-
 get_strategy_param = config.get_strategy_param
 get_trading_param = config.get_trading_param
 get_param_with_override = config.get_param_with_override
 
 __all__ = [
-    # General parameters
     "SYMBOLS",
-    "DEFENSIVE_QUALITY_STOCKS",
-    "DEFENSIVE_SAFE_HAVENS",
     "RISK_ON_SYMBOLS",
     "RISK_OFF_SYMBOLS",
     "INITIAL_CAPITAL",
@@ -93,19 +81,17 @@ __all__ = [
     "BACKTEST_END_DATE",
     "WARMUP_PERIOD_DAYS",
     "GLOBAL_RANDOM_SEED",
-    # Strategy parameters
     "HYBRID_DUAL_PARAMS",
-    "ALPHA_UNIFIED_PARAMS",
     "CURRENT_STRATEGY",
     "WFO_ENABLED",
-    # Trading and risk parameters
+    "WFO_TRAIN_PERIOD",
+    "WFO_TEST_PERIOD",
+    "OPTIMIZATION_PARAMS",
     "RISK_PARAMS",
     "TRADING_PARAMS",
-    # Functions
     "get_current_strategy_params",
     "get_strategy_param",
     "get_trading_param",
     "get_param_with_override",
-    # Registry instance
     "config",
 ]

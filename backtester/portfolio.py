@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict
 import numpy as np
+import pandas as pd
 
 import config.trading_parameters as tp
 from backtester.events import OrderEvent, SignalEvent
@@ -9,7 +10,12 @@ from backtester.events import OrderEvent, SignalEvent
 
 class Portfolio:
     def __init__(
-        self, events_queue, symbol_list, data_handler, initial_capital=100000.0
+        self,
+        events_queue,
+        symbol_list,
+        data_handler,
+        initial_capital=100000.0,
+        all_market_data=None,
     ):
         """Initialize portfolio with basic execution capabilities"""
         self.events = events_queue
@@ -74,6 +80,26 @@ class Portfolio:
             "max_consecutive_wins": 0,
             "max_consecutive_losses": 0,
         }
+
+        # === Market Data ===
+        self.all_market_data = all_market_data
+        if self.all_market_data is not None:
+            try:
+                spy_data = self.all_market_data.xs(
+                    "SPY", level="symbol", drop_level=True
+                )
+                if not spy_data.empty and "close" in spy_data.columns:
+                    self.benchmark_prices = spy_data["close"].sort_index()
+            except KeyError:
+                self.logger.warning(
+                    "SPY symbol not found in all_market_data for benchmark."
+                )
+            if self.benchmark_prices is not None and not self.benchmark_prices.empty:
+                self.logger.info("Portfolio successfully loaded SPY benchmark prices.")
+            else:
+                self.logger.warning(
+                    "Failed to load SPY benchmark prices from all_market_data."
+                )
 
         # === Performance Tracking ===
         self.peak_value = initial_capital
@@ -147,9 +173,6 @@ class Portfolio:
 
         self.current_holdings["total"] = total_value
 
-        if total_value > self.initial_capital * 100:
-            logging.error(f"WARNING: Unrealistic portfolio value: ${total_value:,.0f}")
-
     def on_signal(self, event):
         if event.type != "Signal":
             return
@@ -198,23 +221,8 @@ class Portfolio:
         if quantity_to_trade > 0:
             # This is a BUY or INCREASE order
 
-            # Cash Constraint Check
-            required_cash = quantity_to_trade * current_price
-            # Use a small buffer to avoid running out of cash for commissions
-            available_cash = self.current_holdings["cash"] * (1 - self.position_buffer)
-
-            if required_cash > available_cash:
-                adjusted_quantity = int(available_cash / current_price)
-                self.logger.warning(
-                    f"Cash constraint for {symbol}. Reducing buy from {quantity_to_trade} to {adjusted_quantity} shares."
-                )
-                quantity_to_trade = adjusted_quantity
-
-            if quantity_to_trade <= 0:
-                self.logger.info(
-                    f"Not enough cash to place any buy order for {symbol}."
-                )
-                return
+            # REMOVED: Cash constraint logic is now handled by the DecisionEngine.
+            # The Portfolio layer now assumes incoming signals are fully funded.
 
             order = OrderEvent(
                 timestamp=signal.timestamp,
@@ -272,7 +280,7 @@ class Portfolio:
 
         order = OrderEvent(
             timestamp=signal.timestamp,
-            symbol=symbol,
+            symbol=signal.symbol,
             order_type="Mkt",
             quantity=quantity,
             direction="Sell",
@@ -291,7 +299,16 @@ class Portfolio:
             self._process_sell_fill(event)
 
     def _process_buy_fill(self, event):
-        """Process executed buy order"""
+        """
+        Process executed buy order using Average Cost Method.
+
+        When adding to an existing position, the cost basis is updated to the
+        weighted average of the old position and new purchase:
+        New Average Cost = (Old Cost × Old Qty + New Cost × New Qty) / Total Qty
+
+        Args:
+            event: FillEvent containing executed trade details
+        """
         symbol = event.symbol
         quantity = event.quantity
         fill_cost = event.fill_cost
@@ -309,15 +326,16 @@ class Portfolio:
         total_cost = fill_cost + commission
         self.current_holdings["cash"] -= total_cost
 
-        # Track entry for PnL calculation
+        # Track entry for PnL calculation using Average Cost Method
         if symbol not in self.position_entries:
+            # First entry for this symbol
             self.position_entries[symbol] = {
                 "price": price_per_share,
                 "quantity": quantity,
                 "entry_time": event.timestamp,
             }
         else:
-            # Average up/down
+            # Average up/down: blend old and new cost basis
             old_entry = self.position_entries[symbol]
             old_cost = old_entry["price"] * old_entry["quantity"]
             new_cost = price_per_share * quantity
@@ -329,7 +347,7 @@ class Portfolio:
             self.position_entries[symbol] = {
                 "price": avg_price,
                 "quantity": total_quantity,
-                "entry_time": old_entry["entry_time"],
+                "entry_time": old_entry["entry_time"],  # Keep original entry time
             }
 
         # Record trade
@@ -350,7 +368,17 @@ class Portfolio:
         )
 
     def _process_sell_fill(self, event):
-        """Process executed sell order"""
+        """
+        Process executed sell order using Average Cost Method.
+
+        PnL is calculated using the average cost basis:
+        Realized PnL = (Exit Price - Average Cost) × Quantity Sold - Commission
+
+        For partial exits, the remaining position keeps the same average cost.
+
+        Args:
+            event: FillEvent containing executed trade details
+        """
         symbol = event.symbol
         quantity = event.quantity
         fill_cost = event.fill_cost
@@ -365,25 +393,42 @@ class Portfolio:
         self.current_holdings["cash"] += proceeds
 
         pnl = 0.0
-        entry_date = None  # ADDED
-        entry_price = 0.0  # ADDED
-        holding_days = 0  # ADDED
+        entry_date = None
+        entry_price = 0.0
+        holding_days = 0
+        market_return = 0.0
 
         if symbol in self.position_entries:
             entry_info = self.position_entries[symbol]
-            entry_price = entry_info["price"]
-            entry_date = entry_info.get("entry_time")  # ADDED
+            entry_price = entry_info["price"]  # Average cost basis
+            entry_date = entry_info.get("entry_time")
+            # PnL calculation: (exit price - average cost) * quantity - commission
             pnl = (price_per_share - entry_price) * quantity - commission
 
-            # Calculate holding period - ADDED
+            # Calculate holding period
             if entry_date:
                 holding_days = (event.timestamp - entry_date).days
+            if self.benchmark_prices is not None and entry_date is not None:
+                try:
+                    start_bm_price = self.benchmark_prices.asof(entry_date)
+                    end_bm_price = self.benchmark_prices.asof(event.timestamp)
+
+                    if (
+                        pd.notna(start_bm_price)
+                        and pd.notna(end_bm_price)
+                        and start_bm_price > 0
+                    ):
+                        market_return = (end_bm_price / start_bm_price) - 1
+                except Exception as e:
+                    self.logger.warning(f"为 {symbol} 计算 market_return 时出错: {e}")
 
             self._update_trade_stats(pnl)
 
             if self.current_positions[symbol] == 0:
+                # Full exit: remove position entry
                 del self.position_entries[symbol]
             else:
+                # Partial exit: reduce quantity but keep same average cost
                 self.position_entries[symbol]["quantity"] -= quantity
 
         # Record trade with MORE details - CRITICAL FIX
@@ -406,7 +451,8 @@ class Portfolio:
                     (pnl / (entry_price * quantity) * 100)
                     if entry_price > 0 and quantity > 0
                     else 0
-                ),  # ADDED
+                ),
+                "market_return": market_return,
             }
         )
 

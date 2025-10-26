@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
+import time
 import pandas as pd
 import yfinance as yf
 from sqlalchemy import text

@@ -17,6 +17,8 @@ def _calculate_essential_features_for_group(group: pd.DataFrame) -> pd.DataFrame
 
     close = group["close"].astype(float)
     volume = group["volume"].astype(float)
+    high = group["high"].astype(float)  # ATR needs high price
+    low = group["low"].astype(float)  # ATR needs low price
 
     # === CRITICAL: Returns calculation (all factors need this) ===
     group["returns_1d"] = close.pct_change(1)
@@ -32,6 +34,17 @@ def _calculate_essential_features_for_group(group: pd.DataFrame) -> pd.DataFrame
     group["sma_20"] = close.rolling(window=20, min_periods=10).mean()
     group["sma_50"] = close.rolling(window=50, min_periods=25).mean()
     group["sma_200"] = close.rolling(window=200, min_periods=100).mean()
+
+    # === ATR (for slippage model) ===
+    high_low = high - low
+    high_close = np.abs(high - close.shift())
+    low_close = np.abs(low - close.shift())
+
+    # Calculate True Range (TR)
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+
+    # Calculate ATR with a 14-period Wilder's smoothing
+    group["atr_14"] = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
 
     return group.fillna(method="ffill")
 
@@ -214,7 +227,6 @@ def prepare_features_for_backtest(
     macro_data: Optional[pd.DataFrame] = None,
     config: Dict = None,
 ) -> pd.DataFrame:
-
     calculator = TechnicalIndicatorCalculator(config)
     result = calculator.calculate_all_indicators(price_data, macro_data)
 

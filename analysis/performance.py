@@ -1,83 +1,233 @@
+# --- START OF FILE performance.py ---
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from typing import Dict, List, Optional
 
 
-def _calculate_years_passed(equity_curve):
-    start_date = equity_curve.index[0]
-    end_date = equity_curve.index[-1]
-    return (end_date - start_date).days / 365.2
-
-
-def create_equity_curve_dataframe(all_holdings):
+def create_equity_curve_dataframe(all_holdings: List[Dict]) -> pd.DataFrame:
+    """Transforms a list of holdings snapshots into a clean equity curve DataFrame."""
     df = pd.DataFrame(all_holdings)
     if "timestamp" not in df.columns:
-        print("PERFORMANCE ERROR: 'timestamp' column not found in holdings records.")
-        return pd.DataFrame(columns=["cash", "total", "positions_value", "returns"])
+        return pd.DataFrame()
 
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df.dropna(subset=["timestamp"], inplace=True)
-    df.sort_values("timestamp", inplace=True)
+    df = (
+        df.drop_duplicates(subset=["timestamp"], keep="last")
+        .set_index("timestamp")
+        .sort_index()
+    )
 
-    df.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
-    df.set_index("timestamp", inplace=True)
-    df.sort_index(inplace=True)
-    df.index = pd.to_datetime(df.index)
     if df.index.duplicated().any():
-        print(
-            f"WARNING: Found {df.index.duplicated().sum()} duplicate timestamps after initial cleaning"
-        )
         df = df[~df.index.duplicated(keep="last")]
 
     df["positions_value"] = df.drop(columns=["cash", "total"], errors="ignore").sum(
         axis=1
     )
-    df["returns"] = df["total"].pct_change()
-    df["returns"].fillna(0, inplace=True)
+    df["returns"] = df["total"].pct_change().fillna(0)
+
     return df
 
 
-def calculate_performance_metrics(equity_curve, periods_per_year=252):
-    total_return = (equity_curve["total"].iloc[-1] / equity_curve["total"].iloc[0]) - 1
-    mean_daily_return = equity_curve["returns"].mean()
-    std_daily_return = equity_curve["returns"].std()
-    sharpe_ratio = mean_daily_return / std_daily_return
-    annualized_sharpe_ratio = sharpe_ratio * np.sqrt(periods_per_year)
-    high_water_mark = equity_curve["total"].cummax()
-    drawdown = (equity_curve["total"] - high_water_mark) / high_water_mark
-    max_drawdown = drawdown.min()
-    annualized_volatility = std_daily_return * np.sqrt(periods_per_year)
-    metrics = {
-        "Total Return (%)": f"{total_return * 100:.2f}",
-        "Annualized Volatility (%)": f"{annualized_volatility * 100:.2f}",
-        "Sharpe Ratio": f"{annualized_sharpe_ratio:.2f}",
-        "Maximum Drawdown (%)": f"{max_drawdown * 100:.2f}",
+def calculate_advanced_metrics(
+    equity_curve: pd.DataFrame, initial_capital: float, risk_free_rate: float = 0.02
+) -> Dict[str, float]:
+    """Calculates a comprehensive set of risk-adjusted performance metrics."""
+    if equity_curve is None or equity_curve.empty or len(equity_curve) < 20:
+        return {}
+
+    total_equity = equity_curve["total"]
+    daily_returns = total_equity.pct_change().dropna()
+    active_returns = daily_returns[daily_returns != 0].copy()
+    if len(active_returns) < 20:
+        active_returns = daily_returns
+
+    final_value = total_equity.iloc[-1]
+    total_return = final_value / initial_capital - 1
+
+    days_held = (total_equity.index[-1] - total_equity.index[0]).days
+    years_passed = max(days_held / 365.25, 1.0 / 252.0)
+
+    annualized_return = (
+        (1 + total_return) ** (1 / years_passed) - 1 if years_passed > 0 else 0
+    )
+    annualized_volatility = active_returns.std() * np.sqrt(252)
+
+    sharpe_ratio = (
+        (annualized_return - risk_free_rate) / annualized_volatility
+        if annualized_volatility > 0
+        else 0.0
+    )
+
+    negative_returns = active_returns[active_returns < 0]
+    downside_deviation = negative_returns.std() * np.sqrt(252)
+    sortino_ratio = (
+        (annualized_return - risk_free_rate) / downside_deviation
+        if downside_deviation > 0
+        else 0.0
+    )
+
+    high_water_mark = total_equity.cummax()
+    drawdown_series = (total_equity - high_water_mark) / high_water_mark
+    max_drawdown = abs(drawdown_series.min())
+
+    calmar_ratio = annualized_return / max_drawdown if max_drawdown > 0 else 0.0
+    max_dd_duration = _calculate_max_drawdown_duration(drawdown_series)
+
+    monthly_returns = total_equity.resample("ME").last().pct_change()
+    positive_months = (
+        (monthly_returns > 0).sum() / len(monthly_returns)
+        if len(monthly_returns) > 0
+        else 0
+    )
+
+    return {
+        "Total Return (%)": total_return * 100,
+        "Annualized Return (%)": annualized_return * 100,
+        "Volatility (%)": annualized_volatility * 100,
+        "Sharpe Ratio": sharpe_ratio,
+        "Sortino Ratio": sortino_ratio,
+        "Calmar Ratio": calmar_ratio,
+        "Maximum Drawdown (%)": -max_drawdown * 100,
+        "Max DD Duration (days)": float(max_dd_duration),
+        "VaR (95%)": active_returns.quantile(0.05) * 100,
+        "CVaR (95%)": active_returns[
+            active_returns <= active_returns.quantile(0.05)
+        ].mean()
+        * 100,
+        "Skewness": active_returns.skew(),
+        "Kurtosis": active_returns.kurtosis(),
+        "Positive Months (%)": positive_months * 100,
     }
-    return metrics
+
+
+def _calculate_max_drawdown_duration(drawdown_series: pd.Series) -> int:
+    """Helper function to calculate the longest drawdown period in days."""
+    in_dd = drawdown_series < 0
+    if not in_dd.any():
+        return 0
+
+    grouper = (in_dd != in_dd.shift()).cumsum()
+    dd_groups = drawdown_series[in_dd].groupby(grouper)
+    if dd_groups.ngroups == 0:
+        return 0
+
+    max_duration = dd_groups.apply(lambda x: x.index[-1] - x.index[0]).max()
+    return max_duration.days
+
+
+def generate_monthly_returns_table(equity_curve: pd.DataFrame) -> pd.DataFrame:
+    """Generates a pivot table of monthly returns."""
+    if equity_curve.empty:
+        return pd.DataFrame()
+
+    monthly_returns = equity_curve["total"].resample("ME").last().pct_change()
+    pivot_table = (
+        monthly_returns.to_frame(name="returns").pivot_table(
+            index=monthly_returns.index.year,
+            columns=monthly_returns.index.strftime("%b"),
+            values="returns",
+        )
+        * 100
+    )
+
+    # Ensure month columns are in calendar order
+    months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    ]
+    pivot_table = pivot_table.reindex(columns=months).fillna(0)
+
+    yearly_returns = (
+        equity_curve["total"]
+        .resample("YE")
+        .last()
+        .pct_change()
+        .reindex(equity_curve.index, method="bfill")
+    )
+    pivot_table["YTD"] = (
+        equity_curve["total"]
+        .groupby(equity_curve.index.year)
+        .apply(lambda x: (x.iloc[-1] / x.iloc[0] - 1) * 100)
+    )
+
+    return pivot_table
+
+
+def calculate_trade_stats_by_symbol(trades_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculates detailed trade statistics per symbol, returning raw numeric data."""
+    if trades_df is None or trades_df.empty or "pnl" not in trades_df.columns:
+        return pd.DataFrame()
+
+    grouped = trades_df.groupby("symbol")
+    stats = grouped["pnl"].agg(["count", "sum"])
+    stats["wins"] = grouped.apply(lambda x: (x["pnl"] > 0).sum())
+    stats["losses"] = grouped.apply(lambda x: (x["pnl"] < 0).sum())
+    stats["gross_profit"] = grouped.apply(lambda x: x[x["pnl"] > 0]["pnl"].sum())
+    stats["gross_loss"] = abs(grouped.apply(lambda x: x[x["pnl"] < 0]["pnl"].sum()))
+
+    stats["win_rate"] = stats["wins"] / stats["count"]
+    stats["profit_factor"] = (stats["gross_profit"] / stats["gross_loss"]).replace(
+        np.inf, 0
+    )  # Avoid inf
+    stats["avg_win"] = (stats["gross_profit"] / stats["wins"]).replace(np.inf, 0)
+    stats["avg_loss"] = (stats["gross_loss"] / stats["losses"]).replace(np.inf, 0)
+
+    result_df = stats[
+        ["count", "win_rate", "profit_factor", "sum", "avg_win", "avg_loss"]
+    ].rename(
+        columns={
+            "count": "Total Trades",
+            "win_rate": "Win Rate",
+            "profit_factor": "Profit Factor",
+            "sum": "Total PnL",
+            "avg_win": "Avg Win ($)",
+            "avg_loss": "Avg Loss ($)",
+        }
+    )
+
+    return result_df.sort_values("Total PnL", ascending=False)
 
 
 def plot_equity_curve(
-    equity_curve, benchmark_equity=None, title="Strategy Performance"
+    equity_curve: pd.DataFrame,
+    benchmark_equity: Optional[pd.DataFrame] = None,
+    title: str = "Strategy Performance",
 ):
+    """Plots the equity curve and saves it to a file without showing it."""
     plt.style.use("seaborn-v0_8-darkgrid")
     fig, ax = plt.subplots(figsize=(15, 8))
+
     ax.plot(
         equity_curve.index,
         equity_curve["total"],
-        label="Total Equity",
+        label="Strategy Equity",
         color="blue",
         linewidth=2,
     )
     ax.fill_between(
         equity_curve.index,
-        equity_curve["cash"],
         equity_curve["total"],
+        equity_curve["cash"],
         alpha=0.3,
         color="orange",
         label="Positions Value",
     )
+
     if benchmark_equity is not None:
         ax.plot(
             benchmark_equity.index,
@@ -87,36 +237,45 @@ def plot_equity_curve(
             linestyle="--",
             linewidth=1.5,
         )
+
     ax.set_title(title, fontsize=16)
     ax.set_xlabel("Date", fontsize=12)
     ax.set_ylabel("Portfolio Value ($)", fontsize=12)
     ax.legend(loc="upper left")
     ax.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, p: f"${x:,.0f}"))
-    plt.show()
+
+    fig.tight_layout()
+    plt.savefig("equity_curve.png", dpi=300)
+    plt.close(fig)  # Close figure to free memory and prevent blocking
 
 
-def create_interactive_dashboard(equity_curve, benchmark_equity=None, trades_df=None):
+def create_interactive_dashboard(
+    equity_curve: pd.DataFrame,
+    benchmark_equity: Optional[pd.DataFrame] = None,
+    trades_df: Optional[pd.DataFrame] = None,
+):
+    """Generates an interactive Plotly dashboard and saves it as an HTML file."""
     fig = make_subplots(
         rows=4,
         cols=1,
         shared_xaxes=True,
-        row_heights=[0.35, 0.2, 0.2, 0.25],
+        row_heights=[0.4, 0.2, 0.2, 0.2],
         subplot_titles=(
             "Portfolio Value",
-            "Position Exposure",
-            "Relative Performance",
+            "Risk Asset Exposure",
+            "Cumulative Alpha vs Benchmark",
             "Drawdown",
         ),
-        vertical_spacing=0.03,
+        vertical_spacing=0.04,
     )
 
-    # Row 1: Portfolio Value
+    # Plot 1: Portfolio Value
     fig.add_trace(
         go.Scatter(
             x=equity_curve.index,
             y=equity_curve["total"],
             name="Strategy Value",
-            line=dict(color="blue", width=2),
+            line=dict(color="blue"),
         ),
         row=1,
         col=1,
@@ -133,47 +292,41 @@ def create_interactive_dashboard(equity_curve, benchmark_equity=None, trades_df=
             col=1,
         )
 
-    # Row 2: Position Exposure (Risk Asset Exposure)
-    if "positions_value" in equity_curve.columns and "total" in equity_curve.columns:
-        position_ratio = equity_curve["positions_value"] / equity_curve["total"] * 100
-        fig.add_trace(
-            go.Scatter(
-                x=equity_curve.index,
-                y=position_ratio,
-                name="Risk Asset Exposure (%)",
-                line=dict(color="orange"),
-                fill="tozeroy",
-            ),
-            row=2,
-            col=1,
-        )
-        fig.update_yaxes(title_text="Risk Exposure %", range=[0, 105], row=2, col=1)
+    # Plot 2: Position Exposure
+    exposure = (equity_curve["positions_value"] / equity_curve["total"] * 100).fillna(0)
+    fig.add_trace(
+        go.Scatter(
+            x=equity_curve.index,
+            y=exposure,
+            name="Risk Exposure (%)",
+            line=dict(color="orange"),
+            fill="tozeroy",
+        ),
+        row=2,
+        col=1,
+    )
 
-    # Row 3: Relative Performance (Cumulative difference between strategy vs benchmark)
+    # Plot 3: Relative Performance (Alpha)
     if benchmark_equity is not None:
-        strategy_returns = equity_curve["returns"]
-        benchmark_returns = benchmark_equity["returns"]
-        aligned_strategy, aligned_benchmark = strategy_returns.align(
-            benchmark_returns, join="inner"
-        )
-
-        relative_returns = (aligned_strategy - aligned_benchmark).fillna(0)
-        cumulative_relative = relative_returns.cumsum()
-
+        aligned_returns = pd.concat(
+            [equity_curve["returns"], benchmark_equity["returns"]], axis=1, join="inner"
+        ).fillna(0)
+        aligned_returns.columns = ["strategy", "benchmark"]
+        cumulative_alpha = (
+            aligned_returns["strategy"] - aligned_returns["benchmark"]
+        ).cumsum() * 100
         fig.add_trace(
             go.Scatter(
-                x=cumulative_relative.index,
-                y=cumulative_relative * 100,
-                name="Cumulative Excess Return (%)",
-                line=dict(color="green" if cumulative_relative.iloc[-1] > 0 else "red"),
+                x=cumulative_alpha.index,
+                y=cumulative_alpha,
+                name="Cumulative Alpha (%)",
+                line=dict(color="green"),
             ),
             row=3,
             col=1,
         )
-        fig.add_hline(y=0, line_dash="dot", line_color="gray", row=3, col=1)
-        fig.update_yaxes(title_text="Excess Return %", row=3, col=1)
 
-    # Row 4: Drawdown
+    # Plot 4: Drawdown
     hwm = equity_curve["total"].cummax()
     drawdown = (equity_curve["total"] - hwm) / hwm * 100
     fig.add_trace(
@@ -187,333 +340,186 @@ def create_interactive_dashboard(equity_curve, benchmark_equity=None, trades_df=
         row=4,
         col=1,
     )
-    fig.update_yaxes(title_text="Drawdown %", row=4, col=1)
 
-    # Add trade markers (on the first subplot)
-    if trades_df is not None:
-        buys = trades_df[trades_df["direction"] == "Buy"]
-        sells = trades_df[trades_df["direction"] == "Sell"]
-        if not buys.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=buys["timestamp"],
-                    y=buys["price"],
-                    mode="markers",
-                    name="Buy Signal",
-                    marker=dict(color="green", symbol="triangle-up", size=8),
-                ),
-                row=1,
-                col=1,
-            )
-        if not sells.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=sells["timestamp"],
-                    y=sells["price"],
-                    mode="markers",
-                    name="Sell Signal",
-                    marker=dict(color="red", symbol="triangle-down", size=8),
-                ),
-                row=1,
-                col=1,
-            )
-
-    fig.update_layout(title="Comprehensive Strategy Diagnosis Dashboard", height=1000)
-    fig.update_xaxes(title_text="Date", row=4, col=1)
-    fig.show()
+    fig.update_layout(
+        title="Comprehensive Strategy Diagnosis Dashboard",
+        height=1200,
+        template="plotly_white",
+    )
     fig.write_html("detailed_backtest_analysis.html")
 
 
-def analyze_market_phases(equity_curve, benchmark_equity):
+def analyze_market_phases(equity_curve: pd.DataFrame, benchmark_equity: pd.DataFrame):
+    """Prints a comparative performance analysis across different market phases."""
     print("\n=== MARKET PHASE ANALYSIS ===")
-
     phases = {
-        "Post-GFC Recovery": ("2010-01-01", "2015-12-31"),
-        "Pre-Trump Uncertainty": ("2016-01-01", "2016-12-31"),
-        "Trump Rally": ("2017-01-01", "2018-12-31"),
-        "Trade War Volatility": ("2019-01-01", "2019-12-31"),
         "COVID Crash & Recovery": ("2020-01-01", "2021-12-31"),
         "Inflation & Rate Hikes": ("2022-01-01", "2023-12-31"),
-        "Recent Period": ("2024-01-01", "2025-01-01"),
+        "Recent Period": ("2024-01-01", pd.to_datetime("today").strftime("%Y-%m-%d")),
     }
+    for phase, (start, end) in phases.items():
+        strat_slice = equity_curve.loc[start:end]
+        bench_slice = benchmark_equity.loc[start:end]
+        if len(strat_slice) < 2 or len(bench_slice) < 2:
+            continue
 
-    for phase_name, (start_date, end_date) in phases.items():
-        try:
-            start_dt = pd.to_datetime(start_date)
-            end_dt = pd.to_datetime(end_date)
-
-            phase_strategy = equity_curve[
-                (equity_curve.index >= start_dt) & (equity_curve.index <= end_dt)
-            ]
-            phase_benchmark = benchmark_equity[
-                (benchmark_equity.index >= start_dt)
-                & (benchmark_equity.index <= end_dt)
-            ]
-
-            if len(phase_strategy) < 2 or len(phase_benchmark) < 2:
-                continue
-
-            strategy_return = (
-                phase_strategy["total"].iloc[-1] / phase_strategy["total"].iloc[0]
-            ) - 1
-            benchmark_return = (
-                phase_benchmark["total"].iloc[-1] / phase_benchmark["total"].iloc[0]
-            ) - 1
-            excess_return = strategy_return - benchmark_return
-
-            strategy_hwm = phase_strategy["total"].cummax()
-            strategy_dd = (
-                (phase_strategy["total"] - strategy_hwm) / strategy_hwm
-            ).min()
-
-            benchmark_hwm = phase_benchmark["total"].cummax()
-            benchmark_dd = (
-                (phase_benchmark["total"] - benchmark_hwm) / benchmark_hwm
-            ).min()
-
-            print(f"\n{phase_name} ({start_date} to {end_date}):")
-            print(f"  Strategy Return: {strategy_return * 100:.1f}%")
-            print(f"  Benchmark Return: {benchmark_return * 100:.1f}%")
-            print(f"  Excess Return: {excess_return * 100:.1f}%")
-            print(f"  Strategy Max DD: {strategy_dd * 100:.1f}%")
-            print(f"  Benchmark Max DD: {benchmark_dd * 100:.1f}%")
-
-        except Exception as e:
-            print(f"  Error analyzing {phase_name}: {e}")
-
-
-def calculate_advanced_metrics(
-    equity_curve: pd.DataFrame, initial_capital: float, risk_free_rate: float = 0.02
-) -> dict:
-    if equity_curve.empty or len(equity_curve) < 20:
-        return {"error": "Insufficient data for performance calculation."}
-
-    # --- Basic Setup ---
-    total_equity = equity_curve["total"]
-    daily_returns = total_equity.pct_change().dropna()
-
-    # Use only days with trading activity for rate-of-return metrics
-    active_returns = daily_returns[daily_returns != 0].copy()
-    if len(active_returns) < 20:
-        active_returns = daily_returns  # Fallback if too few active days
-
-    # --- Return Metrics ---
-    final_value = total_equity.iloc[-1]
-    total_return_pct = (final_value / initial_capital - 1) * 100
-
-    days_held = (total_equity.index[-1] - total_equity.index[0]).days
-    years_passed = max(days_held / 365.25, 1.0 / 252.0)  # Avoid division by zero
-
-    annualized_return_pct = (
-        (1 + total_return_pct / 100) ** (1 / years_passed) - 1
-    ) * 100
-
-    # --- Risk Metrics ---
-    annualized_volatility_pct = active_returns.std() * np.sqrt(252) * 100
-
-    # --- Risk-Adjusted Ratios (Corrected Formulas) ---
-    if annualized_volatility_pct > 0:
-        sharpe_ratio = (
-            annualized_return_pct - risk_free_rate * 100
-        ) / annualized_volatility_pct
-    else:
-        sharpe_ratio = 0.0
-
-    negative_returns = active_returns[active_returns < 0]
-    if not negative_returns.empty:
-        downside_deviation_pct = negative_returns.std() * np.sqrt(252) * 100
-        sortino_ratio = (
-            (annualized_return_pct - risk_free_rate * 100) / downside_deviation_pct
-            if downside_deviation_pct > 0
-            else 0.0
-        )
-    else:
-        sortino_ratio = float("inf")
-
-    # --- Drawdown Analysis (More Robust) ---
-    high_water_mark = total_equity.cummax()
-    drawdown_series = (total_equity - high_water_mark) / high_water_mark
-    max_drawdown_pct = abs(drawdown_series.min()) * 100
-
-    if max_drawdown_pct > 0:
-        calmar_ratio = annualized_return_pct / max_drawdown_pct
-    else:
-        calmar_ratio = float("inf")
-
-    max_dd_duration = _calculate_max_drawdown_duration(drawdown_series)
-
-    # --- Distributional Stats ---
-    skewness = active_returns.skew()
-    kurtosis = active_returns.kurtosis()
-    var_95 = active_returns.quantile(0.05) * 100
-    cvar_95 = (
-        active_returns[active_returns <= active_returns.quantile(0.05)].mean() * 100
-    )
-
-    # --- Monthly/Daily Stats ---
-    monthly_returns = total_equity.resample("ME").last().pct_change()
-    positive_months_pct = (
-        (monthly_returns > 0).sum() / len(monthly_returns) * 100
-        if len(monthly_returns) > 0
-        else 0
-    )
-
-    # Return formatted strings for direct display
-    return {
-        "Total Return (%)": f"{total_return_pct:.2f}",
-        "Annualized Return (%)": f"{annualized_return_pct:.2f}",
-        "Volatility (%)": f"{annualized_volatility_pct:.2f}",
-        "Sharpe Ratio": f"{sharpe_ratio:.3f}",
-        "Sortino Ratio": f"{sortino_ratio:.3f}",
-        "Calmar Ratio": f"{calmar_ratio:.3f}",
-        "Maximum Drawdown (%)": f"{-max_drawdown_pct:.2f}",
-        "Max DD Duration (days)": f"{max_dd_duration}",
-        "VaR (95%)": f"{var_95:.2f}%",
-        "CVaR (95%)": f"{cvar_95:.2f}%",
-        "Skewness": f"{skewness:.3f}",
-        "Kurtosis": f"{kurtosis:.3f}",
-        "Positive Months (%)": f"{positive_months_pct:.1f}",
-    }
-
-
-def _calculate_max_drawdown_duration(drawdown_series: pd.Series) -> int:
-    """Calculates the longest period (in days) of being in a drawdown."""
-    if drawdown_series.index.duplicated().any():
-        drawdown_series = drawdown_series[
-            ~drawdown_series.index.duplicated(keep="last")
-        ]
-
-    in_dd = drawdown_series < 0
-
-    if not in_dd.any():
-        return 0
-    grouper = (in_dd != in_dd.shift()).cumsum()
-
-    dd_groups = drawdown_series[in_dd].groupby(grouper)
-
-    if dd_groups.ngroups == 0:
-        return 0
-    max_duration_delta = dd_groups.apply(lambda x: x.index[-1] - x.index[0]).max()
-
-    return max_duration_delta.days
-
-
-def generate_monthly_returns_table(equity_curve):
-    if equity_curve.empty:
-        return pd.DataFrame()
-
-    monthly_values = equity_curve["total"].resample("ME").last()
-    monthly_returns = monthly_values.pct_change().dropna()
-    monthly_table = pd.DataFrame(
-        {
-            "Year": monthly_returns.index.year,
-            "Month": monthly_returns.index.month,
-            "Return": monthly_returns.values,
-        }
-    )
-    pivot_table = monthly_table.pivot(index="Year", columns="Month", values="Return")
-    pivot_table = pivot_table.fillna(0) * 100
-    yearly_groups = equity_curve["total"].groupby(equity_curve.index.year)
-    yearly_returns_values = (
-        yearly_groups.apply(
-            lambda x: (x.iloc[-1] / x.iloc[0] - 1) if not x.empty else 0
-        )
-        * 100
-    )
-    pivot_table["YTD"] = yearly_returns_values.reindex(pivot_table.index).fillna(0)
-    month_names = {
-        1: "Jan",
-        2: "Feb",
-        3: "Mar",
-        4: "Apr",
-        5: "May",
-        6: "Jun",
-        7: "Jul",
-        8: "Aug",
-        9: "Sep",
-        10: "Oct",
-        11: "Nov",
-        12: "Dec",
-    }
-    pivot_table = pivot_table.rename(columns=month_names)
-
-    return pivot_table
-
-
-def calculate_trade_stats_by_symbol(trades_df: pd.DataFrame):
-    if (
-        trades_df is None
-        or trades_df.empty
-        or "symbol" not in trades_df.columns
-        or "pnl" not in trades_df.columns
-    ):
+        strat_ret = (strat_slice["total"].iloc[-1] / strat_slice["total"].iloc[0]) - 1
+        bench_ret = (bench_slice["total"].iloc[-1] / bench_slice["total"].iloc[0]) - 1
+        print(f"\n{phase} ({start} to {end}):")
         print(
-            "PERFORMANCE WARNING: Trade data is missing or malformed for per-symbol analysis."
-        )
-        return pd.DataFrame()
-
-    stats_by_symbol = []
-
-    for symbol, group in trades_df.groupby("symbol"):
-        total_trades = len(group)
-        wins = group[group["pnl"] > 0]
-        losses = group[group["pnl"] < 0]
-
-        num_wins = len(wins)
-        num_losses = len(losses)
-
-        win_rate = num_wins / total_trades if total_trades > 0 else 0
-
-        total_pnl = group["pnl"].sum()
-
-        gross_profit = wins["pnl"].sum()
-        gross_loss = abs(losses["pnl"].sum())
-
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
-
-        avg_win = wins["pnl"].mean() if num_wins > 0 else 0
-        avg_loss = losses["pnl"].mean() if num_losses > 0 else 0
-
-        stats_by_symbol.append(
-            {
-                "Symbol": symbol,
-                "Total Trades": total_trades,
-                "Win Rate (%)": f"{win_rate * 100:.1f}",
-                "Profit Factor": (
-                    f"{profit_factor:.2f}" if profit_factor != float("inf") else "Inf"
-                ),
-                "Total PnL ($)": f"{total_pnl:,.2f}",
-                "Avg Win ($)": f"{avg_win:,.2f}",
-                "Avg Loss ($)": f"{avg_loss:,.2f}",
-            }
+            f"  Strategy Return: {strat_ret:+.1%}, Benchmark Return: {bench_ret:+.1%}, Alpha: {strat_ret - bench_ret:+.1%}"
         )
 
-    if not stats_by_symbol:
-        return pd.DataFrame()
 
-    result_df = pd.DataFrame(stats_by_symbol).set_index("Symbol")
-    return result_df
+# ============================================================================
+# DIAGNOSTIC FUNCTIONS
+# ============================================================================
 
 
-def calculate_sharpe_ratio(equity_curve, risk_free_rate=0.02):
+def analyze_filter_effectiveness(diagnostics_log: List[Dict]):
+    """Analyzes and prints a summary of signal filter effectiveness."""
+    if not diagnostics_log:
+        print("No diagnostic data for filter effectiveness analysis.")
+        return
 
-    # Method 1: Using only trading days with actual changes
-    returns = equity_curve["total"].pct_change().dropna()
+    df = pd.DataFrame(
+        [d.get("filter_stats", {}) for d in diagnostics_log if d.get("filter_stats")]
+    )
+    if df.empty:
+        return
 
-    # Filter out days with zero returns (no trading activity)
-    active_returns = returns[returns != 0]
+    summary = df.sum()
+    total = summary.get("total", 0)
+    if total == 0:
+        return
 
-    if len(active_returns) < 20:
-        return 0
+    print("\n=== FILTER EFFECTIVENESS ANALYSIS ===")
+    passed = summary.get("passed_all", 0)
+    print(f"Total Signals Processed: {int(total):,}")
+    print(f"Signals Passed All Filters: {int(passed):,} ({passed / total:.1%})")
+    print("-" * 40)
 
-    # Calculate daily excess returns
-    daily_rf = risk_free_rate / 252
-    excess_returns = active_returns - daily_rf
+    reasons = summary.drop(["total", "passed_all"]).sort_values(ascending=False)
+    for reason, count in reasons.items():
+        if count > 0:
+            print(
+                f"{reason.replace('_', ' ').title():<30}: {int(count):>7,} ({count / total:5.1%})"
+            )
 
-    # Calculate Sharpe ratio
-    if excess_returns.std() > 0:
-        sharpe = (excess_returns.mean() / excess_returns.std()) * np.sqrt(252)
-    else:
-        sharpe = 0
 
-    return sharpe
+def plot_signal_stability(diagnostics_log: List[Dict]):
+    """Plots raw vs. filtered signal counts over time and saves the figure."""
+    if not diagnostics_log:
+        return
+    df = pd.DataFrame(diagnostics_log)
+    if (
+        df.empty
+        or "timestamp" not in df.columns
+        or "raw_signal_counts" not in df.columns
+    ):
+        return
+
+    df["raw_total"] = df["raw_signal_counts"].apply(
+        lambda x: sum(x.values()) if isinstance(x, dict) else 0
+    )
+    df["filtered_total"] = df["filtered_signal_counts"].apply(
+        lambda x: sum(x.values()) if isinstance(x, dict) else 0
+    )
+
+    fig, ax = plt.subplots(figsize=(15, 7))
+    ax.plot(df["timestamp"], df["raw_total"], label="Raw Signals", color="skyblue")
+    ax.plot(
+        df["timestamp"],
+        df["filtered_total"],
+        label="Filtered Signals (Used)",
+        color="darkblue",
+        marker="o",
+        markersize=4,
+    )
+    ax.set_title("Signal Count Stability Over Time", fontsize=16)
+    ax.set_ylabel("Signal Count")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig("signal_stability_analysis.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_position_stability(diagnostics_log: List[Dict], min_positions_target: int = 5):
+    """Plots the number of positions held over time and saves the figure."""
+    if not diagnostics_log:
+        return
+    df = pd.DataFrame(diagnostics_log)
+    if (
+        df.empty
+        or "timestamp" not in df.columns
+        or "final_position_count" not in df.columns
+    ):
+        return
+
+    fig, ax = plt.subplots(figsize=(15, 7))
+    ax.plot(
+        df["timestamp"],
+        df["final_position_count"],
+        label="Position Count",
+        color="darkblue",
+        marker="o",
+        markersize=4,
+    )
+    ax.axhline(
+        y=min_positions_target,
+        color="red",
+        linestyle="--",
+        label=f"Min Target ({min_positions_target})",
+    )
+    ax.set_title("Position Count Stability", fontsize=16)
+    ax.set_ylabel("Number of Positions")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig("position_stability_analysis.png", dpi=300)
+    plt.close(fig)
+
+
+def plot_capital_utilization(diagnostics_log: List[Dict]):
+    """Plots target vs. actual capital utilization over time and saves the figure."""
+    if not diagnostics_log:
+        return
+    df = pd.DataFrame(diagnostics_log)
+    if df.empty or "timestamp" not in df.columns or "target_exposure" not in df.columns:
+        return
+
+    fig, ax = plt.subplots(figsize=(15, 7))
+    ax.plot(
+        df["timestamp"],
+        df["target_exposure"],
+        label="Target Exposure ($)",
+        color="green",
+        linestyle="--",
+    )
+    ax.plot(
+        df["timestamp"],
+        df["final_position_value"],
+        label="Actual Position Value ($)",
+        color="blue",
+    )
+    ax.fill_between(
+        df["timestamp"],
+        df["final_position_value"],
+        df["target_exposure"],
+        where=df["final_position_value"] < df["target_exposure"],
+        color="red",
+        alpha=0.2,
+        label="Under-utilized Capital",
+    )
+
+    ax.set_title("Capital Utilization: Target vs. Actual", fontsize=16)
+    ax.set_ylabel("Capital ($)")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig("capital_utilization_analysis.png", dpi=300)
+    plt.close(fig)

@@ -104,7 +104,14 @@ class HistoricCSVDataHandler(DataHandler):
 
 
 class HistoricDBDataHandler(DataHandler):
-    def __init__(self, events_queue, symbol_list, all_processed_data, start_date=None):
+    def __init__(
+        self,
+        events_queue,
+        symbol_list,
+        all_processed_data,
+        start_date=None,
+        warmup_days=0,
+    ):
         self.events = events_queue
         self.symbol_list = symbol_list
         self.latest_symbol_data = {}
@@ -112,6 +119,9 @@ class HistoricDBDataHandler(DataHandler):
         self.sliced_data_by_time = None
         self.timeline = None
         self.current_time_index = 0
+        self.warmup_days = warmup_days
+        self.warmup_complete = False
+        self.trading_start_index = 0
 
         self._load_preprocessed_data(all_processed_data, start_date)
 
@@ -156,11 +166,41 @@ class HistoricDBDataHandler(DataHandler):
                     self.timeline, start_datetime, side="left"
                 )
                 if start_index < len(self.timeline):
-                    self.current_time_index = start_index
-                    effective_start_date = self.timeline[start_index].date()
-                    print(
-                        f"DATA_HANDLER: Timeline set to start on {effective_start_date}."
-                    )
+                    self.trading_start_index = start_index
+
+                    # Calculate warmup start index using calendar days
+                    if self.warmup_days > 0:
+                        # Calculate target date by subtracting warmup_days (calendar days)
+                        from datetime import timedelta
+
+                        warmup_target_date = start_datetime - timedelta(
+                            days=self.warmup_days
+                        )
+
+                        # Find the closest trading day index in timeline
+                        warmup_start_index = np.searchsorted(
+                            self.timeline, warmup_target_date, side="left"
+                        )
+                        warmup_start_index = max(0, warmup_start_index)
+
+                        self.current_time_index = warmup_start_index
+                        warmup_start_date = self.timeline[warmup_start_index].date()
+                        trading_start_date = self.timeline[start_index].date()
+                        actual_trading_days = start_index - warmup_start_index
+                        print(
+                            f"DATA_HANDLER: Warmup period of {self.warmup_days} calendar days configured "
+                            f"({actual_trading_days} trading days)."
+                        )
+                        print(
+                            f"DATA_HANDLER: Warmup starts on {warmup_start_date}, trading starts on {trading_start_date}."
+                        )
+                    else:
+                        self.current_time_index = start_index
+                        self.warmup_complete = True
+                        effective_start_date = self.timeline[start_index].date()
+                        print(
+                            f"DATA_HANDLER: Timeline set to start on {effective_start_date} (no warmup)."
+                        )
                 else:
                     print(
                         f"DATA_HANDLER WARNING: Start date {start_date} is after the last data point."
@@ -177,6 +217,16 @@ class HistoricDBDataHandler(DataHandler):
             return
 
         current_timestamp = self.timeline[self.current_time_index]
+
+        # Check if warmup period is complete
+        if (
+            not self.warmup_complete
+            and self.current_time_index >= self.trading_start_index
+        ):
+            self.warmup_complete = True
+            logging.info(
+                f"DATA_HANDLER: Warmup complete. Trading begins at {current_timestamp.date()}"
+            )
 
         try:
             todays_data = self.sliced_data_by_time[current_timestamp]
@@ -195,7 +245,9 @@ class HistoricDBDataHandler(DataHandler):
                 "volume": row["volume"],
                 "sma200": row.get("sma200", 0),
                 "sma50": row.get("sma50", 0),
-                "vol_forecast": validated_vol,  # Use validated value
+                "volume_sma_20": row.get("volume_sma_20", 0),  # Pass ADTV proxy
+                "atr_14": row.get("atr_14", 0),  # Pass ATR
+                "vol_forecast": validated_vol,
                 "rsi": row.get("rsi", 0),
                 "DGS10": row.get("DGS10", 0),
                 "DGS10_MA60": row.get("DGS10_MA60", 0),
