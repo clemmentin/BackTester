@@ -18,6 +18,14 @@ WFO_TEST_PERIOD = 1  # year
 HYBRID_DUAL_PARAMS = {
     # =================== REBALANCE & SIZING LOGIC ===================
     "rebalance_frequency": "weekly",
+    "tactical_mode": {
+        "enabled": True,
+        "strategic_rebalance_day": 0,
+        "tactical_entry_enabled": False,
+        "tactical_min_ev_threshold": 0.015,
+        "tactical_min_confidence_threshold": 0.85,
+        "tactical_cash_deployment_pct": 0.40,
+    },
     "min_ev_percentile_filter": 0.23,
     "sizing_ev_to_confidence_ratio": 0.71,
     "bull_market_leverage": 1.07,
@@ -35,6 +43,7 @@ HYBRID_DUAL_PARAMS = {
         },
         "momentum_confirmer_sensitivity": 0.15,
         "deviation_sensitivity": 0.5,
+        "ic_weight_sensitivity": 1.19,
     },
     "ic_monitoring": {
         "enabled": True,
@@ -48,7 +57,7 @@ HYBRID_DUAL_PARAMS = {
         "enabled": True,
         "use_ewma_learning": True,
         "use_dynamic_learning_rate": True,
-        "prior_strength": 60.0,
+        "prior_strength": 50.0,
         "learning_rate": 0.02,
         "error_learning_rate_multiplier": 2.5,
         "max_learning_rate": 0.4,
@@ -58,7 +67,7 @@ HYBRID_DUAL_PARAMS = {
         "confidence_to_alpha_scaler": 5.0,
         "signal_to_gain_scaler": 0.16,
         "signal_to_weight_scaler": 16.0,
-        "enable_persistence": True,
+        "enable_persistence": False,
         "persistence_dir": "./data/bayesian_priors",
     },
     "signal_evaluation_period": 20,
@@ -170,8 +179,14 @@ OPTIMIZATION_PARAMS = {
     "hybrid_dual_alpha": {
         "signal_to_gain_scaler": (0.10, 0.25),
         "transition_lambda": (0.75, 1.75),
-        "ic_weight_sensitivity": (1.0, 1.5),
         "min_ev_percentile_filter": (0.15, 0.30),
+        "tactical_min_ev_threshold": (0.01, 0.03),
+        "tactical_min_confidence_threshold": (0.75, 0.90),
+        "atr_multiplier": (2.0, 3.5),
+        "lpr_profit_threshold": (0.30, 0.60),
+        "cvar_target": (0.015, 0.03),
+        "max_drawdown_threshold": (0.20, 0.30),
+        "signal_evaluation_period": (5, 30),
     }
 }
 

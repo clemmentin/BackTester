@@ -14,7 +14,6 @@ class StopInfo:
     stop_price: float
     highest_price: float
     trailing_activated: bool
-    # MODIFIED: Added fields to track profit protection status.
     profit_level_achieved: int
     current_trail_distance: float
 
@@ -41,14 +40,19 @@ class StopManager:
         self.trailing_activation_pct = config.get("trailing_stop_activation", 0.10)
         self.base_trailing_distance = config.get("trailing_stop_distance", 0.08)
 
-        # NEW: Load profit protection configuration
         self.pp_config = config.get("profit_protection", {})
         self.pp_enabled = self.pp_config.get("enabled", False)
         # Sort levels by profit threshold to ensure they are checked in order.
         self.pp_levels = sorted(
             self.pp_config.get("levels", []), key=lambda x: x["profit"]
         )
+        # Let profit run
+        self.lpr_config = self.pp_config.get("let_profits_run", {})
+        self.lpr_enabled = self.lpr_config.get("enabled", False)
+        self.lpr_profit_threshold = self.lpr_config.get("profit_threshold", 0.40)
+        self.lpr_final_trail_pct = self.lpr_config.get("final_trail_pct", 0.10)
 
+        self.half_exited_positions = set()
         self.stops: Dict[str, StopInfo] = {}
 
         self.logger.info(
@@ -61,8 +65,8 @@ class StopManager:
         """Adds a new position to be tracked, using a dynamic or fixed stop loss.
 
         Args:
-          symbol: str: 
-          entry_price: float: 
+          symbol: str:
+          entry_price: float:
           stop_loss_pct: Optional[float]:  (Default value = None)
 
         Returns:
@@ -71,7 +75,9 @@ class StopManager:
         if not self.enabled:
             return
 
-        # Use the dynamic stop_loss_pct if provided, otherwise fall back to the fixed one.
+        if symbol in self.half_exited_positions:
+            self.half_exited_positions.remove(symbol)
+
         stop_pct_to_use = (
             stop_loss_pct
             if stop_loss_pct is not None and stop_loss_pct > 0
@@ -100,9 +106,9 @@ class StopManager:
         """Updates all stops based on the latest price data and generates exit signals.
 
         Args:
-          price_data: Dict[str: 
-          float]: 
-          timestamp: datetime: 
+          price_data: Dict[str:
+          float]:
+          timestamp: datetime:
 
         Returns:
 
@@ -176,16 +182,29 @@ class StopManager:
 
             # Final check to see if the current price has breached the stop price
             if current_price <= stop_info.stop_price:
+                action_type = "exit"
                 reason = (
                     "Profit protection"
                     if stop_info.trailing_activated
-                    or stop_info.profit_level_achieved > -1
                     else "Initial stop"
                 )
+                if (
+                    self.lpr_enabled
+                    and current_gain >= self.lpr_profit_threshold
+                    and symbol not in self.half_exited_positions
+                ):
+                    action_type = "reduce_half"
+                    self.half_exited_positions.add(symbol)
+                    stop_info.current_trail_distance = self.lpr_final_trail_pct
+                    stop_info.trailing_activated = True
+                    logging.info(
+                        f"{symbol}: Profit-taking (half). Remaining position now has a {self.lpr_final_trail_pct:.1%} trail."
+                    )
+
                 signals.append(
                     StopSignal(
                         symbol=symbol,
-                        action="exit",
+                        action=action_type,
                         reason=f"{reason} triggered at ${stop_info.stop_price:.2f}",
                         current_price=current_price,
                         stop_price=stop_info.stop_price,
@@ -197,11 +216,14 @@ class StopManager:
         """Removes a position from the stop tracker after it's sold.
 
         Args:
-          symbol: str: 
+          symbol: str:
 
         Returns:
 
         """
+        if symbol in self.half_exited_positions:
+            self.half_exited_positions.remove(symbol)
+
         if symbol in self.stops:
             del self.stops[symbol]
             self.logger.debug(f"Stop tracker removed for: {symbol}")
@@ -210,7 +232,7 @@ class StopManager:
         """Retrieves stop information for a single symbol.
 
         Args:
-          symbol: str: 
+          symbol: str:
 
         Returns:
 

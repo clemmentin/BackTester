@@ -45,12 +45,17 @@ RISK_PARAMS = {
             "enabled": True,
             "eloss_weight": 0.5,
             "atr_weight": 0.5,
-            "atr_multiplier": 2.0,
+            "atr_multiplier": 2.92,
             "min_stop_pct": 0.04,
             "max_stop_pct": 0.18,
         },
         "profit_protection": {
             "enabled": True,
+            "let_profits_run": {
+                "enabled": True,
+                "profit_threshold": 0.40,
+                "final_trail_pct": 0.10,
+            },
             "levels": [
                 {"profit": 0.20, "action": "trail", "trail_pct": 0.15},
                 {"profit": 0.40, "action": "trail", "trail_pct": 0.12},

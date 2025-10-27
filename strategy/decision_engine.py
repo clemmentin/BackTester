@@ -27,7 +27,9 @@ class DecisionEngine:
         self.all_data = all_processed_data
 
         # --- Initialize Core Components ---
-        self.alpha_engine = AlphaEngine(**strategy_kwargs)
+        self.alpha_engine = AlphaEngine(
+            all_processed_data=self.all_data, **strategy_kwargs
+        )
         self.market_detector = (
             self.alpha_engine.market_detector
         )  # Reuse the instance from AlphaEngine
@@ -63,6 +65,8 @@ class DecisionEngine:
         portfolio_value: float,
         market_data_for_day: pd.DataFrame,
         current_positions: Dict,
+        available_cash: float,
+        current_position_values: Dict[str, float],
     ) -> Tuple[Dict, Dict]:
         """
 
@@ -150,16 +154,27 @@ class DecisionEngine:
         final_target_utilization = min(
             current_target_utilization, self.hard_cap_utilization
         )
+        final_target_utilization = min(final_target_utilization, 1.0)
         total_risk_budget = portfolio_value * final_target_utilization
         diagnostics["final_target_utilization"] = final_target_utilization
 
         # --- 6.  Calculate Final Target Positions ---
-        target_portfolio_values = self._calculate_target_positions(
+        ideal_target_portfolio = self._calculate_target_positions(
             final_signals_for_sizing, total_risk_budget
         )
-        diagnostics["final_signals"] = filtered_signals
+        diagnostics["ideal_target_portfolio"] = ideal_target_portfolio
 
-        return target_portfolio_values, diagnostics
+        # 7. Adjust ideal targets based on actual available cash.
+        final_target_portfolio = self._apply_cash_constraint(
+            ideal_target_portfolio=ideal_target_portfolio,
+            current_position_values=current_position_values,
+            available_cash=available_cash,
+        )
+
+        diagnostics["final_signals"] = final_signals_for_sizing
+        diagnostics["final_target_portfolio"] = final_target_portfolio
+
+        return final_target_portfolio, diagnostics
 
     def _calculate_target_positions(
         self, signals: Dict, total_risk_budget: float

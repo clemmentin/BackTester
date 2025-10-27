@@ -58,7 +58,7 @@ class AlphaEngine:
         self.logger = logging.getLogger(__name__)
         self.all_params = kwargs.copy()
 
-        self.executor = ProcessPoolExecutor(max_workers=os.cpu_count())
+        self.executor = ProcessPoolExecutor(max_workers=1)
 
         self.reversal_module = ReversalAlphaModule(**self.all_params)
         self.price_module = PriceAlphaModule(**self.all_params)
@@ -90,7 +90,7 @@ class AlphaEngine:
         self.fwd_return_period = ic_params.get("forward_return_period", 20)
         self.ic_smoothing_alpha = ic_params.get("smoothing_alpha", 0.20)
         self.ic_dynamic_weights = ic_params.get("use_dynamic_weights", True)
-        self.ic_weight_sensitivity = ic_params.get("weight_sensitivity", 1.25)
+        self.ic_weight_sensitivity = ic_params.get("weight_sensitivity", 1.19)
 
         self.deviation_sensitivity = {
             AlphaSource.REVERSAL: np.array([-0.2, -0.3, -0.1, 0.0, 0.0, 0.3, 0.0, 0.0]),
@@ -99,6 +99,7 @@ class AlphaEngine:
             "deviation_sensitivity", 0.5
         )
 
+        self.all_data = self.all_params.get("all_processed_data")
         self.bayesian_ev = BayesianEVCalculator(**self.all_params)
         self.active_signals: Dict[str, Dict] = {}
         self.signal_evaluation_period = self.all_params.get(
@@ -188,13 +189,35 @@ class AlphaEngine:
 
         """
         if symbol in self._last_generated_signals_cache:
-            signal_data = self._last_generated_signals_cache[symbol]
+            signal_data_at_generation = self._last_generated_signals_cache[symbol]
+            entry_market_state = self.market_detector.detect_market_state(
+                self.all_data, timestamp
+            )
+            entry_regime = entry_market_state.regime.value.lower()
+
+            # 2. Recalculate the Expected Value using the entry-time market state
+            ic_val = float(
+                self.smoothed_ic.get(signal_data_at_generation["factor_source"], 0.0)
+            )
+
+            ev_at_entry, diagnostics_at_entry = (
+                self.bayesian_ev.calculate_expected_value(
+                    signal_score=signal_data_at_generation["score"],
+                    signal_confidence=signal_data_at_generation["confidence"],
+                    factor_source=signal_data_at_generation["factor_source"],
+                    regime=entry_regime,
+                    factor_ic=ic_val,
+                )
+            )
+
+            # 3. Store both the original EV (for analysis) and the new EV (for learning)
             self.active_signals[symbol] = {
                 "entry_price": entry_price,
                 "entry_timestamp": timestamp,
-                "signal_data": signal_data,
-                "market_regime": signal_data["market_regime"],
-                "factor_source": signal_data["factor_source"],
+                "signal_data": signal_data_at_generation,  # Original signal data from time t
+                "market_regime_at_entry": entry_regime,  # The correct regime
+                "factor_source": signal_data_at_generation["factor_source"],
+                "predicted_ev_at_entry": ev_at_entry,  # The correctly-timed EV for learning
                 "spy_entry_price": spy_entry_price,
             }
             self.logger.debug(f"Recorded entry for {symbol} at ${entry_price:.2f}")
@@ -256,14 +279,16 @@ class AlphaEngine:
                         is_strong_failure = actual_return < 0.0
 
                     signal_data = active_signal["signal_data"]
+                    ev_for_learning = active_signal["predicted_ev_at_entry"]
+                    regime_for_learning = active_signal["market_regime_at_entry"]
                     outcome = SignalOutcome(
                         symbol=symbol,
                         timestamp=timestamp,
                         factor_source=active_signal["factor_source"],
-                        regime=active_signal["market_regime"],
+                        regime=regime_for_learning,
                         entry_score=signal_data["score"],
                         entry_confidence=signal_data["confidence"],
-                        predicted_ev=signal_data["expected_value"],
+                        predicted_ev=ev_for_learning,
                         was_winner=was_winner,
                         actual_return=actual_return,
                         hold_period=days_held,

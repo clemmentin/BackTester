@@ -493,7 +493,11 @@ class MarketDetector:
         drawdown = index_analysis["drawdown"]
 
         base_confidence = self.regime_confidence.get("normal_base", 0.6)
-
+        if index_analysis.get("is_under_death_cross", False):
+            self.logger.warning(
+                "Long-term DEATH CROSS detected. Forcing defensive regime."
+            )
+            return MarketRegime.BEAR, 0.85
         if garch_vol_state == "high_vol" and drawdown < self.crisis_threshold:
             base_confidence = self.regime_confidence.get("crisis_base", 0.9)
             regime = MarketRegime.CRISIS
@@ -593,6 +597,10 @@ class MarketDetector:
                     else current_price
                 )
                 ma_200 = np.mean(prices[-self.lookback_long :])
+                prev_ma_50 = np.mean(prices[-self.lookback_medium - 1 : -1])
+                prev_ma_200 = np.mean(prices[-self.lookback_long - 1 : -1])
+                is_death_cross = (ma_50 < ma_200) and (prev_ma_50 >= prev_ma_200)
+                is_under_death_cross = ma_50 < ma_200
 
                 trend_strength = 0.0
                 if current_price > ma_200:
@@ -629,6 +637,10 @@ class MarketDetector:
                     "trend_strength": trend_strength,
                     "drawdown": drawdown,
                     "ma_200_deviation": ma_200_deviation,
+                    "is_death_cross": is_death_cross,
+                    "is_under_death_cross": is_under_death_cross,
+                    "ma_50": ma_50,
+                    "ma_200": ma_200,
                 }
         except Exception as e:
             self.logger.error(f"Error analyzing market index: {e}")

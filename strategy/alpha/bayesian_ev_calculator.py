@@ -14,13 +14,15 @@ import pandas as pd
 class BayesianPrior:
     """Stores Bayesian prior parameters for a factor-regime combination."""
 
-    alpha: float = 15.0
-    beta: float = 10.0
+    alpha: float = 2.0
+    beta: float = 2.0
+
+    pseudocount: float = 4.0
+
     mean_gain: float = 0.04
     variance_gain: float = 0.015
     mean_loss: float = -0.015
     variance_loss: float = 0.005
-    pseudocount: float = 12.0
     last_update: Optional[pd.Timestamp] = None
     total_signals: int = 0
 
@@ -269,10 +271,7 @@ class BayesianEVCalculator:
         }
         for factor in factors:
             for regime in regimes:
-                if factor in base_priors and regime in base_priors[factor]:
-                    self.priors[factor][regime] = base_priors[factor][regime]
-                else:
-                    self.priors[factor][regime] = BayesianPrior()
+                self.priors[factor][regime] = BayesianPrior()
 
     def _load_priors_from_disk(self):
         """ """
@@ -364,10 +363,10 @@ class BayesianEVCalculator:
         """
 
         Args:
-          signal_score: float: 
-          signal_confidence: float: 
-          factor_source: str: 
-          regime: str: 
+          signal_score: float:
+          signal_confidence: float:
+          factor_source: str:
+          regime: str:
           factor_ic: float:  (Default value = 0.0)
           components: Optional[Dict]:  (Default value = None)
 
@@ -426,8 +425,8 @@ class BayesianEVCalculator:
         """
 
         Args:
-          factor_source: str: 
-          regime: str: 
+          factor_source: str:
+          regime: str:
 
         Returns:
 
@@ -445,9 +444,9 @@ class BayesianEVCalculator:
         """
 
         Args:
-          prior: BayesianPrior: 
-          signal_confidence: float: 
-          factor_ic: float: 
+          prior: BayesianPrior:
+          signal_confidence: float:
+          factor_ic: float:
 
         Returns:
 
@@ -486,10 +485,10 @@ class BayesianEVCalculator:
         """
 
         Args:
-          prior: BayesianPrior: 
-          signal_score: float: 
-          signal_confidence: float: 
-          factor_ic: float: 
+          prior: BayesianPrior:
+          signal_score: float:
+          signal_confidence: float:
+          factor_ic: float:
 
         Returns:
 
@@ -515,9 +514,9 @@ class BayesianEVCalculator:
         """
 
         Args:
-          prior: BayesianPrior: 
-          signal_score: float: 
-          signal_confidence: float: 
+          prior: BayesianPrior:
+          signal_score: float:
+          signal_confidence: float:
 
         Returns:
 
@@ -536,7 +535,7 @@ class BayesianEVCalculator:
         """
 
         Args:
-          outcome: SignalOutcome: 
+          outcome: SignalOutcome:
 
         Returns:
 
@@ -623,8 +622,8 @@ class BayesianEVCalculator:
         """
 
         Args:
-          score: float: 
-          confidence: float: 
+          score: float:
+          confidence: float:
 
         Returns:
 
@@ -659,7 +658,7 @@ class BayesianEVCalculator:
         """
 
         Args:
-          priors_data: Dict: 
+          priors_data: Dict:
 
         Returns:
 

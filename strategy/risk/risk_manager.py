@@ -15,6 +15,7 @@ from strategy.contracts import RiskBudget
 
 class RiskLevel(Enum):
     """ """
+
     NORMAL = "normal"
     CAUTIOUS = "cautious"
     RECOVERY = "recovery"
@@ -25,6 +26,7 @@ class RiskLevel(Enum):
 
 class RiskManager:
     """ """
+
     def __init__(self, initial_capital: float, config_dict: Dict):
         self.logger = logging.getLogger(__name__)
         self.initial_capital = initial_capital
@@ -126,9 +128,9 @@ class RiskManager:
         """
 
         Args:
-          portfolio_value: float: 
-          timestamp: datetime: 
-          market_state: MarketState: 
+          portfolio_value: float:
+          timestamp: datetime:
+          market_state: MarketState:
 
         Returns:
 
@@ -186,8 +188,8 @@ class RiskManager:
         """
 
         Args:
-          current_value: float: 
-          timestamp: datetime: 
+          current_value: float:
+          timestamp: datetime:
 
         Returns:
 
@@ -236,7 +238,7 @@ class RiskManager:
         """
 
         Args:
-          market_state: MarketState: 
+          market_state: MarketState:
 
         Returns:
 
@@ -264,8 +266,21 @@ class RiskManager:
             1,
         )
 
+        long_term_momentum_score = 1.0
+        if len(self.portfolio_value_history) > 120:
+            long_term_return = (
+                self.portfolio_value_history[-1] / self.portfolio_value_history[-120]
+            ) - 1
+            if long_term_return < -0.05:
+                long_term_momentum_score = np.clip(
+                    1 + (long_term_return / 0.20), 0.2, 1.0
+                )
+
         final_score = (
-            (drawdown_score * 0.40) + (market_score * 0.42) + (volatility_score * 0.18)
+            (drawdown_score * 0.40)
+            + (market_score * 0.30)
+            + (volatility_score * 0.10)
+            + (long_term_momentum_score * 0.20)
         )
         return np.clip(final_score, 0, 1)
 
@@ -275,8 +290,8 @@ class RiskManager:
         """
 
         Args:
-          portfolio_value: float: 
-          timestamp: datetime: 
+          portfolio_value: float:
+          timestamp: datetime:
 
         Returns:
 

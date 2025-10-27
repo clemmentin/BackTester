@@ -13,16 +13,13 @@ import sys
 import time
 from datetime import datetime
 from typing import Optional
-
+from config import general_config
 import pandas as pd
+import numpy as np
+import random
 
 # Add project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-
-# ============================================================================
-# CONFIGURATION IMPORT - SIMPLIFIED
-# ============================================================================
-# Thanks to the new __init__.py, we only need a single, clean import.
 import config
 
 # ============================================================================
@@ -176,6 +173,41 @@ def manage_ml_data_file(mode="archive"):
             print(f"Deleted existing ML data file: {filepath}")
 
 
+def set_global_seeds(seed_value: int):
+    """
+    Sets global random seeds for all relevant libraries to ensure reproducibility.
+
+    Args:
+        seed_value: The integer value to use as the seed.
+    """
+    try:
+        # 1. Python's built-in random module
+        random.seed(seed_value)
+
+        # 2. NumPy for all its random operations
+        np.random.seed(seed_value)
+
+        # 3. Python's hash seed for reproducible dict/set iteration order (less critical in Py 3.7+)
+        os.environ["PYTHONHASHSEED"] = str(seed_value)
+
+        # 4. TensorFlow
+        # import tensorflow as tf
+        # tf.random.set_seed(seed_value)
+
+        # 5. PyTorch
+        # import torch
+        # torch.manual_seed(seed_value)
+        # if torch.cuda.is_available():
+        #     torch.cuda.manual_seed_all(seed_value)
+        #     torch.backends.cudnn.deterministic = True
+        #     torch.backends.cudnn.benchmark = False
+
+        print(f"Global random seeds set to: {seed_value}")
+
+    except Exception as e:
+        print(f"Error setting global seeds: {e}")
+
+
 def main() -> int:
     """Main execution function without try/except blocks."""
     start_time_global = time.time()
@@ -227,4 +259,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    set_global_seeds(general_config.GLOBAL_RANDOM_SEED)
     sys.exit(main())

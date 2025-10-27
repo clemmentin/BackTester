@@ -1,35 +1,32 @@
 # Event-Driven Backtester for Quantitative Strategies
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An advanced event-driven backtesting framework in Python, designed to develop and test adaptive quantitative trading strategies. The system's core is an alpha engine and risk manager that work together to respond to changing market conditions.
+An event-driven backtesting framework in Python for developing and testing quantitative trading strategies. The system is designed to be adaptive, with a core engine that adjusts its behavior based on changing market conditions.
 
 ---
 
-### Key Features
+### Core Components
 
--   **Multi-Factor Alpha Engine:** Generates signals from a 4-factor model (`Reversal`, `Liquidity`, `Momentum`, `Price`), adjusting its logic based on the current market state (e.g., Bull, Bear, Crisis).
+-   **Multi-Factor Model:** Generates trading signals using a combination of four factors: `Reversal`, `Liquidity`, `Momentum`, and `Price`. The logic for each factor is adjusted based on the current market state (e.g., Bull, Bear, Crisis).
 
--   **Bayesian Learning Core:** Features a **Bayesian EV (Expected Value) Calculator** that continuously learns from past trade outcomes. This allows it to more accurately predict the profitability and risk of future signals.
+-   **Bayesian Learning Module:** Includes a module that attempts to predict the Expected Value (EV) of signals by learning from the outcomes of past trades.
 
--   **Proactive Risk Management:**
-    -   **Market State Detection:** Uses statistical models (like GARCH for volatility) to classify the market into clear, understandable states.
-    -   **Smooth Risk Scaling:** Instead of making abrupt changes, the system smoothly adjusts portfolio exposure based on how much the current market deviates from its historical patterns.
+-   **Risk Management:**
+    -   **Market State Detection:** Uses statistical models like GARCH to classify the market into different states.
+    -   **Dynamic Exposure:** Smoothly adjusts the total portfolio investment level based on how much the current market deviates from historical patterns.
 
--   **Walk-Forward Optimization (WFO):** Includes a robust WFO framework to optimize the strategy's key sensitivity parameters, ensuring it performs well on new, unseen data.
+-   **Walk-Forward Optimization (WFO):** Provides a framework to test and optimize the strategy's key parameters on out-of-sample data, aiming to ensure its robustness.
 
--   **High-Performance Engine:**
-    -   **Parallelized Calculation:** Uses multi-core processing to calculate alpha factors concurrently, significantly speeding up backtests.
-    -   **Persistent Caching:** Implements smart caching for computationally heavy tasks, making iterative testing much faster.
-
--   **Advanced Diagnostics & Logging:**
-    -   Generates comprehensive performance reports and visualizations.
-    -   Produces a detailed trade log (`ml_training_data.csv`) with rich data on the market conditions for each trade, creating a perfect dataset for future machine learning analysis.
+-   **Performance & Diagnostics:**
+    -   **Parallel Processing:** Uses multiple CPU cores to speed up the calculation of alpha factors.
+    -   **Data Caching:** Saves the results of time-consuming calculations to make subsequent runs faster.
+    -   **Analysis Tools:** Generates performance reports, visualizations, and a detailed log of all trades (`ml_training_data.csv`) for further analysis.
 
 ---
 
-### Core Technology
+### Technologies Used
 
-**Python | Pandas | NumPy | Statsmodels | Plotly | scikit-optimize | yfinance**
+Python | Pandas | NumPy | Statsmodels | Plotly | scikit-optimize | yfinance
 
 ---
 
@@ -41,7 +38,7 @@ An advanced event-driven backtesting framework in Python, designed to develop an
     cd your-repo-name
     ```
 
-2.  **Set up environment and install dependencies:**
+2.  **Set up the environment and install dependencies:**
     ```bash
     python -m venv .venv
     source .venv/bin/activate  # On Windows: .venv\Scripts\activate
@@ -49,7 +46,7 @@ An advanced event-driven backtesting framework in Python, designed to develop an
     ```
 
 3.  **Configure API Key (Optional):**
-    To fetch macroeconomic data, create a `.env` file with your FRED API key:
+    To fetch macroeconomic data from FRED, create a `.env` file with your API key:
     ```bash
     echo "FRED_API_KEY=your_api_key_here" > .env
     ```
@@ -61,12 +58,53 @@ An advanced event-driven backtesting framework in Python, designed to develop an
 
 ### Outputs
 
-The files generated depend on whether you run a single backtest or a Walk-Forward Optimization (WFO), as set in `strategy_config.py`.
+The generated files depend on the run mode set in `strategy_config.py`.
 
-| Run Mode          | Output Files                      | Note                                                        |
+| Run Mode          | Output Files                      | Description                                                 |
 | :---------------- | :-------------------------------- | :---------------------------------------------------------- |
-| **Single Backtest** | `detailed_backtest_analysis.html` | Interactive Plotly dashboard for the entire period.         |
-|                   | `equity_curve.png`                | Static equity curve plot.                                   |
-| **WFO Run**       | `wfo_results_...csv`              | Summary of optimized parameters for each fold.              |
-|                   | `trade_details_wfo_run.csv`       | Full trade list from all out-of-sample periods.             |
-| **All Runs**      | `ml_training_data.csv`            | Log of all signal outcomes for learning and future analysis.|
+| **Single Backtest** | `detailed_backtest_analysis.html` | An interactive dashboard of the backtest performance.       |
+|                   | `equity_curve.png`                | A static plot of the strategy's equity curve.               |
+| **WFO Run**       | `wfo_results_...csv`              | A summary of optimized parameters from each WFO fold.       |
+|                   | `trade_details_wfo_run.csv`       | A complete list of trades from all out-of-sample periods.   |
+| **All Runs**      | `ml_training_data.csv`            | A detailed log of all trade outcomes for analysis.          |
+
+---
+
+### Project Findings & Future Work
+
+This project started as a backtesting platform and has become a tool for deeper research. The process of building and testing the system has led to some important findings that guide the next steps.
+
+#### Key Finding: The Challenge of Using Raw Signals
+
+A detailed analysis of the raw alpha signals was performed ([see script](./analysis/alpha_signal_diagnostics.py)). The main takeaway is:
+
+-   **Signals are Noisy:** The raw signals generated by the alpha factors show a weak, but measurable, correlation with future stock returns. This is a common and realistic finding in quantitative finance.
+-   **Complex Models Need Good Data:** When a sophisticated Bayesian learning model was used to predict the Expected Value (EV) of these signals, it did not consistently improve the results. This suggests that advanced models struggle when the input data is noisy.
+
+This leads to a practical conclusion: instead of focusing solely on building a better long-term forecasting model, it may be more effective to focus on how to best execute trades based on the realistic, imperfect signals we already have.
+
+---
+
+### Primary Research Direction: Improving Trade Execution
+
+My main research interest, based on the findings above, is to explore how the trade execution process itself can be improved.
+
+*   **Hypothesis:** *How* a trade is executed can be as important as *what* trade is executed, especially when signals are noisy. The best way to execute a trade should change depending on the overall market environment.
+
+*   **Proposed Method:** I plan to develop a two-layer system using Reinforcement Learning (RL):
+    1.  **A Strategic Layer:** This layer will use machine learning to identify the current macro-market state (the "weather").
+    2.  **A Tactical Layer:** This layer will consist of several specialized RL agents, each trained to find the best second-by-second trading strategy for a specific market state.
+
+*   **Goal:** The aim is to see if an intelligent execution agent can improve profitability by turning weak, long-term signals into a series of better-timed, short-term trades. A detailed research proposal on this topic is available upon request.
+
+---
+
+### Secondary Research Direction: Improving the Learning Model
+
+The idea of a learning model is still valuable. The challenges faced by the current Bayesian model provide a clear direction for improvement.
+
+*   **Problem:** The current model only receives two processed data points (`score`, `confidence`), which may not be enough information.
+
+*   **Proposed Solution:** A future version of the model could be trained on a richer set of raw data from the alpha factors (e.g., raw RSI values, liquidity measures, etc.).
+
+*   **Goal:** This would make the learning model more informed and potentially more accurate. This would be a logical next step after a more robust execution framework is in place.

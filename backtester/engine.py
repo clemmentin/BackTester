@@ -14,6 +14,7 @@ from analysis.performance import create_equity_curve_dataframe
 
 class BacktestEngine:
     """ """
+
     def __init__(
         self,
         symbol_list,
@@ -87,6 +88,16 @@ class BacktestEngine:
         self.processed_events = 0
         self.rebalance_count = 0
         self.diagnostics_log = []
+        # Load tactical mode configuration
+        tm_config = strategy_kwargs.get("tactical_mode", {})
+        self.tactical_mode_enabled = tm_config.get("enabled", False)
+        self.strategic_rebalance_day = tm_config.get("strategic_rebalance_day", 0)
+        self.tactical_entry_enabled = tm_config.get("tactical_entry_enabled", False)
+        self.tactical_min_ev = tm_config.get("tactical_min_ev_threshold", 0.02)
+        self.tactical_min_conf = tm_config.get(
+            "tactical_min_confidence_threshold", 0.85
+        )
+        self.tactical_cash_pct = tm_config.get("tactical_cash_deployment_pct", 0.25)
 
         # Load dynamic stop config
         self.dyn_stop_config = tp.RISK_PARAMS.get("stop_loss", {}).get(
@@ -98,6 +109,16 @@ class BacktestEngine:
             f"BacktestEngine initialized with DecisionEngine "
             f"({self.rebalance_frequency} rebalancing). Dynamic Stops: {'ENABLED' if self.dyn_stop_enabled else 'DISABLED'}"
         )
+
+    def _is_strategic_day(self, current_date) -> bool:
+        """Checks if it's the designated day for a full rebalance."""
+        if self.last_rebalance_date is None:
+            return True  # First day is always a strategic day
+
+        is_correct_weekday = current_date.weekday() == self.strategic_rebalance_day
+        days_since_last = (current_date - self.last_rebalance_date).days
+
+        return is_correct_weekday and days_since_last >= 5
 
     def run(self):
         """ """
@@ -135,6 +156,12 @@ class BacktestEngine:
                             self.execution_handler.execute_order(event)
                         elif event.type == "Fill":
                             self.portfolio.on_fill(event)
+                            if event.direction == "Sell" and hasattr(
+                                self.decision_engine, "stop_manager"
+                            ):
+                                self.decision_engine.stop_manager.remove_position(
+                                    event.symbol
+                                )
                     else:
                         # Normal trading phase
                         self.processed_events += 1
@@ -150,6 +177,15 @@ class BacktestEngine:
                             self.execution_handler.execute_order(event)
                         elif event.type == "Fill":
                             self.portfolio.on_fill(event)
+
+                            if event.direction == "Sell":
+                                if hasattr(self.decision_engine, "stop_manager"):
+                                    self.decision_engine.stop_manager.remove_position(
+                                        event.symbol
+                                    )
+                                    logging.debug(
+                                        f"Removed {event.symbol} from StopManager after sell confirmation."
+                                    )
 
                             if event.direction == "Buy":
                                 entry_price = (
@@ -180,7 +216,10 @@ class BacktestEngine:
             if (
                 is_warmup_phase
                 and todays_market_data_dict
-                and self._should_rebalance(current_date)
+                and (
+                    self.last_rebalance_date is None
+                    or (current_date - self.last_rebalance_date).days >= 7
+                )
             ):
                 market_df_for_day = pd.DataFrame.from_dict(
                     todays_market_data_dict, orient="index"
@@ -189,17 +228,19 @@ class BacktestEngine:
                 self.last_rebalance_date = current_date
 
             # === NORMAL TRADING REBALANCING ===
-            if (
-                not is_warmup_phase
-                and todays_market_data_dict
-                and self._should_rebalance(current_date)
-            ):
+            if not is_warmup_phase and todays_market_data_dict:
                 market_df_for_day = pd.DataFrame.from_dict(
                     todays_market_data_dict, orient="index"
                 )
-                self._execute_rebalance(current_timestamp, market_df_for_day)
-                self.last_rebalance_date = current_date
-                self.rebalance_count += 1
+
+                if self._is_strategic_day(current_date):
+                    self._execute_strategic_rebalance(
+                        current_timestamp, market_df_for_day
+                    )
+                    self.last_rebalance_date = current_date
+                    self.rebalance_count += 1
+                elif self.tactical_mode_enabled:
+                    self._execute_tactical_update(current_timestamp, market_df_for_day)
 
         logging.info("Backtest completed. Finalizing learning process...")
         self.decision_engine.alpha_engine.shutdown()
@@ -216,35 +257,12 @@ class BacktestEngine:
         total_return = (final_value / self.initial_capital - 1) * 100
         logging.info(f"Final value: ${final_value:,.2f} (Return: {total_return:.2f}%)")
 
-    def _should_rebalance(self, current_date) -> bool:
-        """
-
-        Args:
-          current_date: 
-
-        Returns:
-
-        """
-        if self.last_rebalance_date is None:
-            return True
-        days_since = (current_date - self.last_rebalance_date).days
-        if self.rebalance_frequency == "daily":
-            return days_since >= 1
-        elif self.rebalance_frequency == "weekly":
-            return days_since >= 7
-        elif self.rebalance_frequency == "biweekly":
-            return days_since >= 14
-        elif self.rebalance_frequency == "monthly":
-            return days_since >= 30
-        else:
-            return days_since >= 7
-
     def _calculate_dynamic_stops(self, final_signals, market_data_for_day):
         """Calculates stop loss percentage based on E[Loss] and ATR.
 
         Args:
-          final_signals: 
-          market_data_for_day: 
+          final_signals:
+          market_data_for_day:
 
         Returns:
 
@@ -287,8 +305,8 @@ class BacktestEngine:
         """
 
         Args:
-          timestamp: 
-          market_data_for_day: 
+          timestamp:
+          market_data_for_day:
 
         Returns:
 
@@ -305,6 +323,7 @@ class BacktestEngine:
         portfolio_value = self.portfolio.current_holdings["total"]
         current_position_weights = self._get_current_position_weights()
         available_cash = self.portfolio.current_holdings["cash"]
+        current_position_values = self.portfolio.get_current_position_values()
 
         try:
             _, _ = self.decision_engine.run_pipeline(
@@ -312,16 +331,18 @@ class BacktestEngine:
                 portfolio_value=portfolio_value,
                 market_data_for_day=market_data_for_day,
                 current_positions=current_position_weights,
+                available_cash=available_cash,
+                current_position_values=current_position_values,
             )
         except Exception as e:
             logging.warning(f"Warmup pipeline update failed at {timestamp.date()}: {e}")
 
-    def _execute_rebalance(self, timestamp, market_data_for_day):
+    def _execute_strategic_rebalance(self, timestamp, market_data_for_day):
         """
 
         Args:
-          timestamp: 
-          market_data_for_day: 
+          timestamp:
+          market_data_for_day:
 
         Returns:
 
@@ -354,6 +375,7 @@ class BacktestEngine:
         portfolio_value = self.portfolio.current_holdings["total"]
         available_cash = self.portfolio.current_holdings["cash"]
         current_position_weights = self._get_current_position_weights()
+        current_position_values = self.portfolio.get_current_position_values()
 
         try:
             target_portfolio, diagnostics = self.decision_engine.run_pipeline(
@@ -361,6 +383,8 @@ class BacktestEngine:
                 portfolio_value=portfolio_value,
                 market_data_for_day=market_data_for_day,
                 current_positions=current_position_weights,
+                available_cash=available_cash,
+                current_position_values=current_position_values,
             )
         except Exception as e:
             logging.error(f"DecisionEngine pipeline failed: {e}", exc_info=True)
@@ -394,11 +418,11 @@ class BacktestEngine:
         """
 
         Args:
-          timestamp: 
+          timestamp:
           target_portfolio_values: dict:
           target_portfolio_values: dict:
           target_portfolio_values: dict:
-          target_portfolio_values: dict: 
+          target_portfolio_values: dict:
 
         Returns:
 
@@ -478,6 +502,46 @@ class BacktestEngine:
             "diagnostics_log": self.diagnostics_log,
         }
 
+    def _execute_tactical_update(self, timestamp, market_data_for_day):
+        """
+        On tactical days, performs defensive sells (stops) and highly selective buys.
+        """
+        logging.debug(f"TACTICAL UPDATE at {timestamp.date()}")
+        current_prices = market_data_for_day["close"].to_dict()
+        current_atr = market_data_for_day["atr_14"].to_dict()
+
+        # --- 1. DEFENSE: Check for stop-loss triggers ---
+        if hasattr(self.decision_engine, "stop_manager"):
+            stop_signals = self.decision_engine.stop_manager.update_stops(
+                current_prices, current_atr, timestamp
+            )
+            for stop_signal in stop_signals:
+                logging.info(
+                    f"TACTICAL STOP: {stop_signal.action.upper()} for {stop_signal.symbol}. Reason: {stop_signal.reason}"
+                )
+
+                if stop_signal.action == "reduce_half":
+                    current_value = self.portfolio.get_current_position_values().get(
+                        stop_signal.symbol, 0
+                    )
+                    target_value = current_value / 2.0
+
+                    reduce_signal = SignalEvent(
+                        timestamp=timestamp,
+                        symbol=stop_signal.symbol,
+                        signal_type="Long",
+                        score=target_value,
+                    )
+                    self.events.put(reduce_signal)
+
+                else:
+                    exit_signal = SignalEvent(
+                        timestamp=timestamp,
+                        symbol=stop_signal.symbol,
+                        signal_type="Exit",
+                    )
+                    self.events.put(exit_signal)
+
     def _convert_fundamental_data(self, individual_data: pd.DataFrame) -> dict:
         """
 
@@ -485,7 +549,7 @@ class BacktestEngine:
           individual_data: pd.DataFrame:
           individual_data: pd.DataFrame:
           individual_data: pd.DataFrame:
-          individual_data: pd.DataFrame: 
+          individual_data: pd.DataFrame:
 
         Returns:
 
