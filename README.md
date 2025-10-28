@@ -73,12 +73,25 @@ The generated files depend on the run mode set in `strategy_config.py`.
 ### Key Findings & Future Research Directions
 
 ![Strategy Performance vs. SPY Benchmark (2000-2025)](./docs/images/equity_curve.png)
-*<p align="center">Figure 1: The strategy demonstrates strong absolute returns and significantly lower drawdown during market crises (e.g., 2008, 2020) compared to the SPY benchmark.</p>*
+*<p align="center">Figure 1: Comparison of the strategy's equity curve against the SPY benchmark. The backtest covers multiple market cycles, including the 2008 financial crisis and the 2020 COVID-19 crash, showing differences in both cumulative return and drawdown behavior.</p>*
 
 <br>
 
-![Diagnostic Analysis of Raw Alpha Signals (Score vs. Future Return)](./docs/images/diagnostic_score_vs_return.png)
-*<p align="center">Figure 2: Despite the strong overall performance, a deeper analysis reveals that the core alpha scores exhibit only a weak, albeit statistically significant, correlation with future returns. This highlights the foundational 'low signal-to-noise' challenge in quantitative finance.</p>*
+<table align="center">
+  <tr>
+    <td align="center"><b>Figure 2a: Raw Signals (Without Engine Processing)</b></td>
+    <td align="center"><b>Figure 2b: Processed Signals (With Full Engine)</b></td>
+  </tr>
+  <tr>
+    <td><img src="./docs/images/factor_diagnose_without_ev.png" alt="Raw Signal Diagnostics" width="400"></td>
+    <td><img src="./docs/images/factor_diagnose_with_ev.png" alt="Processed Signal Diagnostics" width="400"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <p><i>Figure 2: A/B comparison of signal quality. Left (2a) shows the raw signals have near-zero correlation with future returns (flat trendlines). Right (2b) shows that after processing by the adaptive engine, the `Price` and `Reversal` factor scores exhibit a **clear and statistically significant positive correlation** with future returns, transforming them into valuable predictive signals.</i></p>
+    </td>
+  </tr>
+</table>
 
 <br>
 
