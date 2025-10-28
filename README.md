@@ -72,6 +72,16 @@ The generated files depend on the run mode set in `strategy_config.py`.
 
 ### Key Findings & Future Research Directions
 
+![Strategy Performance vs. SPY Benchmark (2000-2025)](./docs/images/equity_curve.png)
+*<p align="center">Figure 1: The strategy demonstrates strong absolute returns and significantly lower drawdown during market crises (e.g., 2008, 2020) compared to the SPY benchmark.</p>*
+
+<br>
+
+![Diagnostic Analysis of Raw Alpha Signals (Score vs. Future Return)](./docs/images/diagnostic_score_vs_return.png)
+*<p align="center">Figure 2: Despite the strong overall performance, a deeper analysis reveals that the core alpha scores exhibit only a weak, albeit statistically significant, correlation with future returns. This highlights the foundational 'low signal-to-noise' challenge in quantitative finance.</p>*
+
+<br>
+
 This project serves as an active research platform, and its development has uncovered several key insights that open up multiple avenues for future research.
 
 #### Key Finding: The Challenge of Low Signal-to-Noise Ratio
