@@ -79,8 +79,8 @@ The generated files depend on the run mode set in `strategy_config.py`.
 
 <table align="center">
   <tr>
-    <td align="center"><b>Figure 2a: Raw Signals (Without Engine Processing)</b></td>
-    <td align="center"><b>Figure 2b: Processed Signals (With Full Engine)</b></td>
+    <td align="center"><b>Figure 2a: Raw Signals (Simple Model)</b></td>
+    <td align="center"><b>Figure 2b: Processed Signals (Full Adaptive Model)</b></td>
   </tr>
   <tr>
     <td><img src="./docs/images/factor_diagnose_without_ev.png" alt="Raw Signal Diagnostics" width="400"></td>
@@ -88,7 +88,7 @@ The generated files depend on the run mode set in `strategy_config.py`.
   </tr>
   <tr>
     <td colspan="2" align="center">
-      <p><i>Figure 2: A/B comparison of signal quality. Left (2a) shows the raw signals have near-zero correlation with future returns (flat trendlines). Right (2b) shows that after processing by the adaptive engine, the `Price` and `Reversal` factor scores exhibit a **clear and statistically significant positive correlation** with future returns, transforming them into valuable predictive signals.</i></p>
+      <p><i>Figure 2: A/B test of the `AlphaEngine`'s signal processing capability. **Left (2a):** Raw signals show little to no predictive power (flat trendlines). **Right (2b):** After processing, the final signals exhibit a clear positive correlation with future returns (Spearman's ρ > 0.2), demonstrating the engine's ability to enhance signal quality.</i></p>
     </td>
   </tr>
 </table>
