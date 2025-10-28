@@ -70,46 +70,45 @@ The generated files depend on the run mode set in `strategy_config.py`.
 
 ---
 
-### Project Findings & Future Work
-
-This project started as a backtesting platform and has become a tool for deeper research. The process of building and testing the system has led to some important findings that guide the next steps.
-
----
-
 ### Key Findings & Future Research Directions
 
-This project is not just a backtesting framework but an active research platform. The process of building and rigorously testing the system has led to a key insight that guides its future development.
+This project serves as an active research platform, and its development has uncovered several key insights that open up multiple avenues for future research.
 
-#### Key Finding: A Signal Enhancement Engine
+#### Key Finding: The Challenge of Low Signal-to-Noise Ratio
 
-Our most critical finding comes from a direct A/B test, comparing the predictive power of the raw alpha signals against the signals processed by the full, adaptive `AlphaEngine` (which includes a Bayesian EV model, IC-dynamic weighting, and market-regime context).
+Our most critical finding comes from a direct diagnostic analysis of the raw alpha signals ([see plots](./docs/images/)). The analysis reveals two core challenges of quantitative trading:
 
-The results are striking.
+1.  **Alpha Signals are Inherently Weak and Noisy:** Raw signals show a statistically significant but weak correlation with future returns (Spearman's ρ ≈ 0.05-0.06).
+2.  **Complex Models Struggle with Noisy Inputs:** A sophisticated Bayesian learning model, designed to predict Expected Value (EV), currently fails to generate reliable forecasts from this noisy data, showing near-zero correlation with actual returns.
 
-1.  **Without the Engine's processing**, the raw alpha factors show only a weak, noisy correlation with future returns. The trendlines are nearly flat, indicating low predictive power.
-
-    *   **[View Diagnostic Plots for Raw Signals (EV Off)](./docs/images/factor_diagnose_without_ev.png)**
-
-2.  **With the full Engine enabled**, the system acts as a powerful **signal enhancement engine**. It successfully filters noise and amplifies the underlying alpha. The correlation between the final processed signal scores and actual returns becomes dramatically stronger and statistically significant.
-
-    *   **[View Diagnostic Plots for Processed Signals (EV On)](./docs/images/factor_diagnose_with_ev.png)**
-
-This A/B test empirically demonstrates that the adaptive components of the `AlphaEngine` are highly effective at transforming low-grade, noisy inputs into high-quality, actionable trading signals.
-
-#### The Next Frontier: From Signal Generation to Optimal Execution
-
-Despite generating high-quality signals, the strategy's overall performance is still constrained. This indicates that the current, simplistic execution model is the next critical bottleneck. The strategic edge gained in signal generation is not being fully capitalized upon during the trade execution phase.
+This empirically demonstrates that advanced modeling alone cannot compensate for a lack of fundamental predictive power in the input signals. This leads to several exciting, open-ended research questions.
 
 ---
 
-### Primary Research Direction: Adaptive Execution via Hierarchical Reinforcement Learning
+### Potential Research Directions
 
-This leads directly to my primary research proposal, which focuses on designing an intelligent execution agent to unlock the full potential of these high-quality signals.
+Based on these findings, I am actively exploring the following research directions to enhance the system's intelligence and robustness:
 
-*   **Hypothesis:** *How* a trade is executed can be as important as *what* is traded. The optimal execution policy must adapt to the prevailing macro-market regime and intraday price action.
+#### 1. Intelligent Execution with Reinforcement Learning
 
-*   **Proposed Method:** I plan to develop a two-layer Reinforcement Learning (RL) framework:
-    1.  **A Strategic Layer:** Identifies the current macro-market state (the "weather").
-    2.  **A Tactical Layer:** Deploys a specialized RL agent trained to find the optimal second-by-second trading strategy for that specific "weather."
+*   **Question:** Instead of trying to perfect a long-term forecast, can we generate "execution alpha" by learning the optimal *short-term* trading policy?
+*   **Hypothesis:** The small edge in the raw signals can be dramatically amplified by an intelligent agent that adapts to intraday market dynamics and macro-economic regimes.
+*   **Potential Method:** Develop a **Hierarchical Reinforcement Learning** framework. A strategic layer would identify the market regime (inspired by works on MMC clustering), and a tactical RL agent would learn the optimal execution policy for each regime (inspired by works on Policy Gradients for execution).
 
-*   **Goal:** To prove that a sophisticated execution agent can generate significant "execution alpha" by translating strong, long-term signals into a series of superiorly timed, short-term trades. 
+#### 2. Advanced Bayesian Workflow and Diagnostics
+
+*   **Question:** Why is the current Bayesian EV model failing, and how can we build a more reliable one?
+*   **Hypothesis:** The model's failure is not a failure of Bayesian methods themselves, but a result of a flawed modeling process (e.g., poor choice of priors, model misspecification).
+*   **Potential Method:** Implement a systematic **Bayesian Workflow** for model development. This would involve:
+    *   Applying advanced diagnostic tools like **Visual Predictive Checks (VPC)** and **Simulation-Based Calibration (SBC)** to deeply understand the current model's failure modes.
+    *   Exploring more **structured, informative priors** that can better incorporate domain knowledge about the alpha signals.
+    *   Investigating methods to handle the **non-stationarity (concept drift)** of financial data within the Bayesian framework.
+
+#### 3. Alpha Factor Engineering & Refinement
+
+*   **Question:** Can we improve the foundational predictive power of the raw alpha signals themselves?
+*   **Hypothesis:** The current alpha factors can be refined or combined in non-linear ways to create stronger, more robust signals.
+*   **Potential Method:**
+    *   Conduct a deep-dive analysis into the failure of the `Reversal` factor.
+    *   Explore feature engineering techniques to create interaction terms between factors.
+    *   Use machine learning models (e.g., Gradient Boosting Trees) to explore non-linear relationships between raw indicators and future returns.
