@@ -88,7 +88,7 @@ The generated files depend on the run mode set in `strategy_config.py`.
   </tr>
   <tr>
     <td colspan="2" align="center">
-      <p><i>Figure 2: A/B test of the `AlphaEngine`'s signal processing capability. **Left (2a):** Raw signals show little to no predictive power (flat trendlines). **Right (2b):** After processing, the final signals exhibit a clear positive correlation with future returns (Spearman's ρ > 0.2), demonstrating the engine's ability to enhance signal quality.</i></p>
+      <p><i>Figure 2: A/B test of signal quality. **Left (2a)**, with ev disabled, the raw factor scores show only a weak correlation with returns (Spearman's ρ ≈ 0.06-0.09). **Right (2b)**, with ev enabled, the predictive power of the `Price` and `Reversal` scores is dramatically amplified (Spearman's ρ > 0.20), transforming them into highly significant predictive signals.</i></p>
     </td>
   </tr>
 </table>
