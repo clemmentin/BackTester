@@ -72,16 +72,55 @@ The generated files depend on the run mode set in `strategy_config.py`.
 
 ### Key Findings & Future Research Directions
 
-This project serves as an active research platform, and its development has uncovered several key insights that open up multiple avenues for future research.
+This project serves as an active research platform for designing and testing adaptive trading systems. A series of controlled experiments were conducted to analyze the system's core components, leading to several key findings.
 
-#### Key Finding: The Challenge of Low Signal-to-Noise Ratio
+#### 1. Overall Strategy Performance
 
-Our most critical finding comes from a direct diagnostic analysis of the raw alpha signals ([see plots](./docs/images/)). The analysis reveals two core challenges of quantitative trading:
+![Strategy Performance vs. SPY Benchmark](./docs/images/equity_curve.png)
+*<p align="center">Figure 1: Comparison of the final strategy's equity curve against the SPY benchmark over the full backtest period. The system demonstrates a distinct risk-return profile, particularly during periods of high market stress like the 2008 and 2020 crises.</p>*
 
-1.  **Alpha Signals are Inherently Weak and Noisy:** Raw signals show a statistically significant but weak correlation with future returns (Spearman's ρ ≈ 0.05-0.06).
-2.  **Complex Models Struggle with Noisy Inputs:** A sophisticated Bayesian learning model, designed to predict Expected Value (EV), currently fails to generate reliable forecasts from this noisy data, showing near-zero correlation with actual returns.
+<br>
 
-This empirically demonstrates that advanced modeling alone cannot compensate for a lack of fundamental predictive power in the input signals. This leads to several exciting, open-ended research questions.
+#### 2. Signal Quality Analysis: A 2x2 Experiment
+
+To understand the source of predictive power, we conducted a 2x2 experiment analyzing the quality of alpha signals under different model configurations. The quality is measured by the Spearman rank correlation between the signal scores and subsequent returns.
+
+<table align="center">
+  <tr>
+    <td align="center" width="50%"></td>
+    <td align="center" width="50%"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Figure 2a: Weak Prior, Learning Disabled</b></td>
+    <td align="center"><b>Figure 2b: Weak Prior, Learning Enabled</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/weakprior_factor_diagnose_without_ev.png" alt="Weak Prior, EV Off" width="95%"></td>
+    <td><img src="docs/images/weakprior_factor_diagnose_with_ev.png" alt="Weak Prior, EV On" width="95%"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Figure 2c: Base Prior, Learning Disabled</b></td>
+    <td align="center"><b>Figure 2d: Base Prior, Learning Enabled</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/baseprior_factor_diagnose_without_ev.png" alt="Base Prior, EV Off" width="95%"></td>
+    <td><img src="docs/images/baseprior_factor_diagnose_with_ev.png" alt="Base Prior, EV On" width="95%"></td>
+  </tr>
+</table>
+
+*<p align="center"><i><b>Figure 2</b>: Diagnostic plots showing the correlation between signal scores and returns. Each quadrant represents a different experimental setup.</i></p>*
+
+#### 3. Interpretation of Experimental Results
+
+The 2x2 experiment reveals several objective patterns:
+
+1.  **Baseline Signal Power (Fig. 2a & 2c):** With the learning engine disabled, the raw alpha signals from the factors exhibit a weak but statistically positive correlation with future returns (Spearman's ρ ≈ 0.06-0.09). This forms the baseline predictive power.
+
+2.  **Impact of the Learning Engine (Comparing Left vs. Right):** Enabling the Bayesian learning engine (`EV On`) significantly amplifies the predictive power of the signals, especially for the `Price` and `Reversal` factors. This effect is most pronounced in the **Weak Prior** setting (Fig. 2b), where the correlation for these factors **jumps to > 0.20**. This indicates the learning algorithm itself is effective at processing and enhancing noisy signals.
+
+3.  **Impact of Prior Knowledge (Comparing Top vs. Bottom):** The model initialized with a **Weak Prior** (Fig. 2b) produces significantly stronger final signals than the model initialized with a handcrafted **Expert Prior** (Fig. 2d). This suggests that in this non-stationary environment, allowing the model to learn from data with minimal initial bias is a more effective approach than relying on fixed, historical "expert knowledge."
+
+4.  **The Execution Bottleneck:** A key finding is that while the best model configuration (Fig. 2b) produces high-quality predictive signals, the final portfolio-level performance improvement is only marginal. This points to a bottleneck in the current portfolio construction and execution logic, where the value of superior signals is not being fully translated into returns.
 
 ---
 
